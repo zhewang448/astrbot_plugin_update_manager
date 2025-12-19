@@ -29,6 +29,11 @@
       "hint": "列表中的插件不会被检查更新",
       "default": []
   },
+  "restart_mode": {
+      "description": "更新插件后是否重启astrbot",
+      "type": "bool",
+      "default": false
+  },
   "test_mode": {
       "description": "测试模式",
       "type": "bool",

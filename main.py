@@ -13,6 +13,9 @@ import astrbot.api.message_components as Comp
 # 导入 APScheduler 库，用于定时任务
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
+# 导入重启部件
+from .dashboard_client import DashboardClient
+
 
 @register(
     "astrbot_plugin_update_manager",
@@ -31,6 +34,13 @@ class PluginUpdateManager(Star):
         self.black_plugin_list = self.config.get("black_plugin_list", [])
         self.white_plugin_list = self.config.get("white_plugin_list", [])
         self.admin_sid_list = self.config.get("admin_sid_list", [])
+        # 初始化重启部件
+        self.restart_mode = self.config.get("", False)
+        self.dashboard: DashboardClient = None
+        if self.restart_mode:
+            self.dashboard = DashboardClient(self.context)
+            if self.dashboard:
+                self.dashboard.initialize()
 
         if self.proxy_address:
             logger.info(f"使用代理：{self.proxy_address}")
@@ -61,6 +71,17 @@ class PluginUpdateManager(Star):
         logger.info("定时任务：正在检查并更新所有插件...")
         final_message = await self._check_and_perform_updates()
         msg_components = [(Comp.Plain(text=final_message))]
+        await self.send_message_to_admin(msg_components)
+        # 尝试重启
+        if self.restart_mode:
+            try:
+                await self.dashboard.restart()
+                logger.info("重启成功。")
+                await self.send_message_to_admin([Comp.Plain(text="重启成功。")])
+            except Exception as e:
+                logger.error(f"重启失败: {e}")
+
+    async def send_message_to_admin(self, msg_components):
         if self.admin_sid_list:  # 如果有管理员sid，则发送消息给管理员
             for admin in self.admin_sid_list:
                 try:
@@ -273,3 +294,6 @@ class PluginUpdateManager(Star):
         if self.scheduler.running:
             self.scheduler.shutdown()  # 关闭调度器
             logger.info("定时任务调度器已关闭。")
+        # 关闭重启部件
+        if self.dashboard:
+            await self.dashboard.terminate()

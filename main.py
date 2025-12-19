@@ -15,18 +15,21 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # 导入重启部件
 from .dashboard_client import DashboardClient
+import asyncio
 
 
 @register(
     "astrbot_plugin_update_manager",
     "bushikq",
     "一个用于一键更新和管理所有AstrBot插件的工具，支持定时检查",
-    "2.2.1",
+    "2.2.2",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+
+        # 配置读取
         self.interval_hours = self.config.get("interval_hours", 24)
         # self.proxy_address = self.context.get_config()["http_proxy"]代理地址
         self.proxy_address = self.config.get("github_proxy", None)
@@ -34,23 +37,23 @@ class PluginUpdateManager(Star):
         self.black_plugin_list = self.config.get("black_plugin_list", [])
         self.white_plugin_list = self.config.get("white_plugin_list", [])
         self.admin_sid_list = self.config.get("admin_sid_list", [])
-        # 初始化重启部件
-        self.restart_mode = self.config.get("", False)
+        self.restart_mode = self.config.get("restart_mode", False)
+
+        # 仅定义变量，暂不初始化
         self.dashboard: DashboardClient = None
-        if self.restart_mode:
-            self.dashboard = DashboardClient(self.context)
-            if self.dashboard:
-                self.dashboard.initialize()
+        self.scheduler: AsyncIOScheduler = None
+
+        # 运行时辅助变量
+        self.not_found_plugins_names = []
+        self.not_found_plugins_data = []
 
         if self.proxy_address:
             logger.info(f"使用代理：{self.proxy_address}")
-        else:
-            logger.info("未设置代理。")
 
+    async def initialize(self):
+        # 初始化并启动定时任务
         if self.interval_hours:
-            # 初始化 APScheduler 调度器
             self.scheduler = AsyncIOScheduler()
-            # 添加一个定时任务，检查并更新插件
             self.scheduler.add_job(
                 self._scheduled_update_check,
                 "interval",
@@ -58,28 +61,42 @@ class PluginUpdateManager(Star):
                 id="scheduled_plugin_update",
                 name="Scheduled Plugin Update Check",
             )
-            # 启动调度器
             self.scheduler.start()
-            logger.info("插件更新管理器已启动，定时任务已安排。")
+            logger.info(
+                f"插件更新管理器已启动，每 {self.interval_hours} 小时检查一次。"
+            )
         else:
-            logger.info("插件更新管理器已启动，但未配置定时任务。")
+            logger.info("插件更新管理器已启动，未配置定时任务。")
+
+        # 初始化 Dashboard 客户端
+        if self.restart_mode:
+            self.dashboard = DashboardClient(self.context)
+            if self.dashboard:
+                await self.dashboard.initialize()
+            logger.info("插件更新管理器：重启模块已就绪")
+
+    async def terminate(self):
+        """插件卸载或机器人关闭时调用"""
+        # 关闭调度器
+        if self.scheduler and self.scheduler.running:
+            self.scheduler.shutdown()
+            logger.info("定时任务调度器已关闭。")
+
+        # 关闭 Dashboard 连接
+        if self.dashboard:
+            await self.dashboard.terminate()
+            logger.info("重启模块连接已断开。")
 
     async def _scheduled_update_check(self):
-        """
-        这个方法会被 APScheduler 定时调用，用于检查并更新所有插件。
-        """
+        """定时任务回调"""
         logger.info("定时任务：正在检查并更新所有插件...")
-        final_message = await self._check_and_perform_updates()
+        final_message, need_to_restart = await self._check_and_perform_updates()
         msg_components = [(Comp.Plain(text=final_message))]
         await self.send_message_to_admin(msg_components)
+
         # 尝试重启
-        if self.restart_mode:
-            try:
-                await self.dashboard.restart()
-                logger.info("重启成功。")
-                await self.send_message_to_admin([Comp.Plain(text="重启成功。")])
-            except Exception as e:
-                logger.error(f"重启失败: {e}")
+        if need_to_restart:
+            await self.restart_command()
 
     async def send_message_to_admin(self, msg_components):
         if self.admin_sid_list:  # 如果有管理员sid，则发送消息给管理员
@@ -92,6 +109,18 @@ class PluginUpdateManager(Star):
                 except Exception as e:
                     logger.error(f"定时任务：发送给管理员{admin}消息失败：{e}")
 
+    async def restart_command(self):
+        """执行重启的内部方法"""
+        if not self.dashboard:
+            self.dashboard = DashboardClient(self.context)
+            await self.dashboard.initialize()
+        logger.info("准备执行重启...")
+        try:
+            await self.dashboard.restart()
+        except Exception as e:
+            logger.error(f"重启失败: {e}")
+            await self.send_message_to_admin([Comp.Plain(text=f"尝试重启失败: {e}")])
+
     async def _check_and_perform_updates(self) -> str:
         """
         返回一个字符串，包含更新的结果摘要。
@@ -101,9 +130,7 @@ class PluginUpdateManager(Star):
         plug_path = Path(__file__).resolve().parent.parent
         logger.info(f"插件目录：{plug_path}")
         if not plug_path.is_dir():
-            error_msg = f"未找到插件目录 {plug_path}，无法执行更新。"
-            logger.error(f"错误：未找到插件目录 {plug_path}。")
-            return error_msg
+            return f"未找到插件目录 {plug_path}，无法执行更新。", False
 
         update_summary_messages = []
         error_msg = []
@@ -123,7 +150,7 @@ class PluginUpdateManager(Star):
             if not plugin_names_to_update:
                 message = "目前没有发现需要更新的插件。"
                 logger.info(f"{message}")
-                return message
+                return message, False
             logger.info(
                 f"发现 {len(plugin_names_to_update)} 个需要更新的插件：{plugin_names_to_update}。"
             )
@@ -146,13 +173,14 @@ class PluginUpdateManager(Star):
                 except Exception as e:
                     error_msg.append(f"更新插件 {plugin_name_to_update} 失败: {str(e)}")
                     failed_plugins.append(plugin_name_to_update)
-                    logger.error(f"{error_msg}\n{traceback.format_exc()}")
+                    logger.error(f"更新失败: {traceback.format_exc()}")
 
             # 构建最终的回复消息
             final_reply_to_user = "\n".join(update_summary_messages)
             if error_msg:
                 final_reply_to_user += (
                     f"\n\n注意：部分插件更新失败：{str(failed_plugins)}。\n"
+                    + "\n".join(error_msg)
                 )
                 final_reply_to_user += "\n".join(error_msg)
             if self.not_found_plugins_names:
@@ -160,12 +188,17 @@ class PluginUpdateManager(Star):
             final_reply_to_user += (
                 f"\n成功更新 {len(successed_plugins)} 个插件。\n{successed_plugins}"
             )
-            return final_reply_to_user
+            if successed_plugins and self.restart_mode:
+                final_reply_to_user += "\n\n即将重启astrbot..."
+                need_to_restart = True
+            else:
+                need_to_restart = False
+
+            return final_reply_to_user, need_to_restart
 
         except Exception as e:
-            error_msg = f"插件更新流程中发生意外错误: {traceback.format_exc()}"
-            logger.error(f"{error_msg}")
-            return f"插件更新流程异常终止: {e}。请检查机器人日志。"
+            logger.error(f"插件更新流程异常: {traceback.format_exc()}")
+            return f"插件更新流程异常终止: {e}", False
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("更新所有插件", alias={"updateallplugins", "更新全部插件"})
@@ -177,8 +210,10 @@ class PluginUpdateManager(Star):
         yield event.plain_result("正在检查并更新所有插件，请稍候...")
 
         # 调用核心更新逻辑，并将结果返回给用户
-        result_message = await self._check_and_perform_updates()
+        result_message, need_to_restart = await self._check_and_perform_updates()
         yield event.plain_result(result_message).use_t2i(False)
+        if need_to_restart:
+            await self.restart_command()
 
     async def _fetch_online_plugins(self):
         """
@@ -207,6 +242,16 @@ class PluginUpdateManager(Star):
 
         logger.warning("远程插件市场数据获取失败")
         return None
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("重启astrbot")
+    async def restart_astrbot_command(self, event: AstrMessageEvent):
+        """
+        当用户发送 "重启astrbot" 命令时，触发重启操作。
+        """
+        logger.info("收到用户命令 '重启astrbot'。")
+        yield event.plain_result("正在重启，请稍候...")
+        await self.restart_command()
 
     async def get_need_update_plugins_list(self):
         """
@@ -286,14 +331,3 @@ class PluginUpdateManager(Star):
                 f.write(f"最终列表：{local_plugins_list}\n\n")
                 f.write(f"名称不一致的插件信息：{self.not_found_plugins_data}\n\n")
         return [p["name"] for p in local_plugins_list if p["is_updatable"]]
-
-    async def terminate(self):
-        """
-        插件终止时（例如：插件被禁用或机器人关闭），关闭 APScheduler 定时任务。
-        """
-        if self.scheduler.running:
-            self.scheduler.shutdown()  # 关闭调度器
-            logger.info("定时任务调度器已关闭。")
-        # 关闭重启部件
-        if self.dashboard:
-            await self.dashboard.terminate()

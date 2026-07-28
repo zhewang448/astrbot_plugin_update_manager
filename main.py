@@ -1,333 +1,509 @@
-import traceback
-import aiohttp
-from pathlib import Path
-from datetime import datetime  # 供调试模式使用
+from __future__ import annotations
 
-from astrbot.api.event import filter, AstrMessageEvent, MessageChain
-from astrbot.api.star import Context, Star, register
+import asyncio
+import inspect
+import json
+import traceback
+from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import aiohttp
+import astrbot.api.message_components as Comp
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api import logger
+from astrbot.api.event import AstrMessageEvent, MessageChain, filter
+from astrbot.api.star import Context, Star, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.utils.version_comparator import VersionComparator
-import astrbot.api.message_components as Comp
 
-# 导入 APScheduler 库，用于定时任务
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-
-# 导入重启部件
 from .dashboard_client import DashboardClient
-import asyncio
+from .plugin_utils import (
+    build_market_index,
+    clean_version,
+    find_market_entry,
+    is_valid_version,
+    normalize_weekdays,
+    parse_check_times,
+)
+
+
+def _compatible_filter_hook(name: str):
+    decorator = getattr(filter, name, None)
+    return decorator() if callable(decorator) else (lambda func: func)
+
+
+MARKET_URLS = (
+    "https://api.soulter.top/astrbot/plugins",
+    "https://cloud.astrbot.app/api/v1/market/plugins.json",
+    "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/raw/refs/heads/main/plugin_cache_original.json",
+)
+
+
+@dataclass
+class UpdateCheckResult:
+    status: str
+    updates: list[dict[str, Any]] = field(default_factory=list)
+    ambiguous: list[dict[str, Any]] = field(default_factory=list)
+    not_found: list[dict[str, Any]] = field(default_factory=list)
+    invalid_versions: list[dict[str, Any]] = field(default_factory=list)
 
 
 @register(
     "astrbot_plugin_update_manager",
     "bushikq",
-    "一个用于一键更新和管理所有AstrBot插件的工具，支持定时检查",
-    "2.2.2",
+    "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
+    "2.4.0",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
 
-        # 配置读取
+        self.schedule_mode = self.config.get("schedule_mode", "interval")
         self.interval_hours = self.config.get("interval_hours", 24)
-        # self.proxy_address = self.context.get_config()["http_proxy"]代理地址
-        self.proxy_address = self.config.get("github_proxy", None)
+        self.check_weekdays = self.config.get(
+            "check_weekdays", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        )
+        self.check_times = self.config.get("check_times", ["04:00"])
+        self.check_on_startup = self.config.get("check_on_startup", False)
+        self.proxy_address = str(self.config.get("github_proxy", "") or "").strip()
         self.test_mode = self.config.get("test_mode", False)
-        self.black_plugin_list = self.config.get("black_plugin_list", [])
-        self.white_plugin_list = self.config.get("white_plugin_list", [])
-        self.admin_sid_list = self.config.get("admin_sid_list", [])
+        self.black_plugin_list = list(self.config.get("black_plugin_list", []) or [])
+        self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
+        self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
         self.restart_mode = self.config.get("restart_mode", False)
 
-        # 仅定义变量，暂不初始化
-        self.dashboard: DashboardClient = None
-        self.scheduler: AsyncIOScheduler = None
-
-        # 运行时辅助变量
-        self.not_found_plugins_names = []
-        self.not_found_plugins_data = []
+        self.dashboard: DashboardClient | None = None
+        self.scheduler: AsyncIOScheduler | None = None
+        self._startup_task: asyncio.Task | None = None
+        self._update_lock = asyncio.Lock()
 
         if self.proxy_address:
-            logger.info(f"使用代理：{self.proxy_address}")
+            logger.info(f"使用 GitHub 代理：{self.proxy_address}")
 
     async def initialize(self):
-        # 初始化并启动定时任务
-        if self.interval_hours:
-            self.scheduler = AsyncIOScheduler()
-            self.scheduler.add_job(
-                self._scheduled_update_check,
-                "interval",
-                hours=self.interval_hours,
-                id="scheduled_plugin_update",
-                name="Scheduled Plugin Update Check",
-            )
-            self.scheduler.start()
-            logger.info(
-                f"插件更新管理器已启动，每 {self.interval_hours} 小时检查一次。"
-            )
-        else:
-            logger.info("插件更新管理器已启动，未配置定时任务。")
+        self._refresh_plugin_list_schema()
+        self._initialize_scheduler()
 
-        # 初始化 Dashboard 客户端
         if self.restart_mode:
-            self.dashboard = DashboardClient(self.context)
-            if self.dashboard:
+            try:
+                self.dashboard = DashboardClient(self.context)
                 await self.dashboard.initialize()
-            logger.info("插件更新管理器：重启模块已就绪")
+                logger.info("插件更新管理器：重启模块已就绪")
+            except Exception as exc:
+                self.dashboard = None
+                logger.error(f"插件更新管理器：重启模块初始化失败：{exc}")
+
+        if self.schedule_mode == "calendar" and self.check_on_startup:
+            self._startup_task = asyncio.create_task(self._scheduled_update_check())
 
     async def terminate(self):
-        """插件卸载或机器人关闭时调用"""
-        # 关闭调度器
+        if self._startup_task and not self._startup_task.done():
+            self._startup_task.cancel()
+
         if self.scheduler and self.scheduler.running:
-            self.scheduler.shutdown()
+            self.scheduler.shutdown(wait=False)
             logger.info("定时任务调度器已关闭。")
 
-        # 关闭 Dashboard 连接
         if self.dashboard:
             await self.dashboard.terminate()
             logger.info("重启模块连接已断开。")
 
-    async def _scheduled_update_check(self):
-        """定时任务回调"""
-        logger.info("定时任务：正在检查并更新所有插件...")
-        final_message, need_to_restart = await self._check_and_perform_updates()
-        msg_components = [(Comp.Plain(text=final_message))]
-        await self.send_message_to_admin(msg_components)
+    def _initialize_scheduler(self) -> None:
+        self.scheduler = AsyncIOScheduler()
+        job_count = 0
 
-        # 尝试重启
+        if self.schedule_mode == "calendar":
+            weekdays, invalid_weekdays = normalize_weekdays(self.check_weekdays)
+            check_times, invalid_times = parse_check_times(self.check_times)
+            if invalid_weekdays:
+                logger.warning(f"已忽略无效星期值：{invalid_weekdays}")
+            if invalid_times:
+                logger.warning(f"已忽略无效检查时间：{invalid_times}，请使用 HH:MM 格式。")
+
+            if weekdays and check_times:
+                day_of_week = ",".join(weekdays)
+                for check_time in check_times:
+                    hour, minute = (int(value) for value in check_time.split(":"))
+                    self.scheduler.add_job(
+                        self._scheduled_update_check,
+                        "cron",
+                        day_of_week=day_of_week,
+                        hour=hour,
+                        minute=minute,
+                        id=f"calendar_plugin_update_{hour:02d}{minute:02d}",
+                        name=f"Plugin Update Check {check_time}",
+                        coalesce=True,
+                        max_instances=1,
+                        misfire_grace_time=60,
+                    )
+                    job_count += 1
+                logger.info(
+                    f"已启用定时方式 2：每周 {day_of_week}，在 {check_times} 检查更新。"
+                )
+            else:
+                logger.warning("定时方式 2 未配置有效的星期和时间，本次不创建定时任务。")
+        else:
+            try:
+                interval_hours = float(self.interval_hours)
+            except (TypeError, ValueError):
+                interval_hours = 0
+                logger.warning(f"无效的检查间隔：{self.interval_hours}")
+            if interval_hours > 0:
+                self.scheduler.add_job(
+                    self._scheduled_update_check,
+                    "interval",
+                    hours=interval_hours,
+                    id="interval_plugin_update",
+                    name="Interval Plugin Update Check",
+                    coalesce=True,
+                    max_instances=1,
+                    misfire_grace_time=60,
+                )
+                job_count = 1
+                logger.info(f"已启用定时方式 1：启动后每 {interval_hours:g} 小时检查一次。")
+            else:
+                logger.info("定时方式 1 的间隔为 0，未启用定时检查。")
+
+        if job_count:
+            self.scheduler.start()
+            for job in self.scheduler.get_jobs():
+                logger.info(f"定时任务 {job.id} 下一次执行时间：{job.next_run_time}")
+        else:
+            self.scheduler = None
+
+    def _refresh_plugin_list_schema(self) -> None:
+        schema = getattr(self.config, "schema", None)
+        if not isinstance(schema, dict):
+            return
+
+        selected = {
+            str(name)
+            for name in (*self.black_plugin_list, *self.white_plugin_list)
+            if str(name).strip()
+        }
+        labels_by_name: dict[str, str] = {}
+        for plugin in self.context.get_all_stars():
+            name = str(getattr(plugin, "name", "") or "").strip()
+            if not name or getattr(plugin, "reserved", False):
+                continue
+            display_name = str(getattr(plugin, "display_name", "") or "").strip()
+            author = str(getattr(plugin, "author", "") or "").strip()
+            label = display_name if display_name and display_name != name else name
+            if display_name and display_name != name:
+                label = f"{display_name}（{name}）"
+            if author:
+                label += f" · {author}"
+            labels_by_name[name] = label
+
+        for name in selected:
+            labels_by_name.setdefault(name, f"{name}（当前未加载）")
+
+        options = sorted(labels_by_name, key=str.casefold)
+        labels = [labels_by_name[name] for name in options]
+        for key in ("white_plugin_list", "black_plugin_list"):
+            item_schema = schema.get(key)
+            if isinstance(item_schema, dict):
+                item_schema["options"] = options
+                item_schema["labels"] = labels
+
+    @_compatible_filter_hook("on_plugin_loaded")
+    async def on_plugin_loaded(self, metadata):
+        self._refresh_plugin_list_schema()
+
+    @_compatible_filter_hook("on_plugin_unloaded")
+    async def on_plugin_unloaded(self, metadata):
+        self._refresh_plugin_list_schema()
+
+    async def _scheduled_update_check(self):
+        if self._update_lock.locked():
+            logger.warning("定时任务：已有插件更新检查正在执行，本次跳过。")
+            return
+
+        logger.info("定时任务：正在检查并更新插件...")
+        final_message, need_to_restart = await self._check_and_perform_updates()
+        await self.send_message_to_admin([Comp.Plain(text=final_message)])
         if need_to_restart:
             await self.restart_command()
 
     async def send_message_to_admin(self, msg_components):
-        if self.admin_sid_list:  # 如果有管理员sid，则发送消息给管理员
-            for admin in self.admin_sid_list:
-                try:
-                    await self.context.send_message(
-                        admin,
-                        MessageChain(msg_components),
-                    )
-                except Exception as e:
-                    logger.error(f"定时任务：发送给管理员{admin}消息失败：{e}")
+        for admin in self.admin_sid_list:
+            try:
+                await self.context.send_message(admin, MessageChain(msg_components))
+            except Exception as exc:
+                logger.error(f"定时任务：发送给管理员 {admin} 消息失败：{exc}")
 
-    async def restart_command(self):
-        """执行重启的内部方法"""
-        if not self.dashboard:
-            self.dashboard = DashboardClient(self.context)
-            await self.dashboard.initialize()
-        logger.info("准备执行重启...")
+    async def restart_command(self, notify_admin: bool = True) -> str | None:
         try:
+            if not self.dashboard:
+                self.dashboard = DashboardClient(self.context)
+                await self.dashboard.initialize()
+            logger.info("准备执行重启...")
             await self.dashboard.restart()
-        except Exception as e:
-            logger.error(f"重启失败: {e}")
-            await self.send_message_to_admin([Comp.Plain(text=f"尝试重启失败: {e}")])
+            return None
+        except Exception as exc:
+            error_message = f"尝试重启失败：{exc}"
+            logger.error(error_message)
+            if notify_admin:
+                await self.send_message_to_admin([Comp.Plain(text=error_message)])
+            return error_message
 
-    async def _check_and_perform_updates(self) -> str:
-        """
-        返回一个字符串，包含更新的结果摘要。
-        """
-        # 检查所有必要的依赖是否成功导入
+    async def _check_and_perform_updates(self) -> tuple[str, bool]:
+        if self._update_lock.locked():
+            return "已有一次插件更新检查正在执行，请稍后再试。", False
 
-        plug_path = Path(__file__).resolve().parent.parent
-        logger.info(f"插件目录：{plug_path}")
-        if not plug_path.is_dir():
-            return f"未找到插件目录 {plug_path}，无法执行更新。", False
+        async with self._update_lock:
+            try:
+                check_result = await self.get_need_update_plugins_list()
+                if check_result.status == "fetch_failed":
+                    return "插件市场请求失败，请检查网络或代理设置后重试。", False
 
-        update_summary_messages = []
-        error_msg = []
-        failed_plugins = []
-        successed_plugins = []
+                notes = self._format_check_notes(check_result)
+                if not check_result.updates:
+                    message = "目前没有发现需要更新的插件。"
+                    if notes:
+                        message += f"\n\n{notes}"
+                    logger.info(message)
+                    return message, False
 
-        try:
-            if self.test_mode:  # 调试模式
-                with open(
-                    Path(__file__).resolve().parent / "test.md", "w", encoding="utf-8"
-                ) as f:
-                    f.write(f"于{datetime.now()}记录\n ")
-                    logger.info("调试模式：已生成测试文件 test.md。")
-
-            # 提取需要更新插件的名称列表，用于日志输出
-            plugin_names_to_update = await self.get_need_update_plugins_list()
-            if not plugin_names_to_update:
-                message = "目前没有发现需要更新的插件。"
-                logger.info(f"{message}")
-                return message, False
-            logger.info(
-                f"发现 {len(plugin_names_to_update)} 个需要更新的插件：{plugin_names_to_update}。"
-            )
-            update_summary_messages.append(
-                f"发现 {len(plugin_names_to_update)} 个插件需要更新。"
-            )
-
-            # 遍历并逐个更新插件
-            for plugin_name_to_update in plugin_names_to_update:
+                update_method = self.context._star_manager.update_plugin
                 try:
-                    logger.info(f"正在更新插件：{plugin_name_to_update}...")
-                    await self.context._star_manager.update_plugin(
-                        plugin_name=plugin_name_to_update,
-                        proxy=self.proxy_address,
-                    )
-                    # await self.context._star_manager.reload(specified_plugin_name=plugin_name_to_update)实测会自动重载插件，无需手动重新加载
-                    logger.info(f"插件 {plugin_name_to_update} 更新并已自动重新加载。")
-                    successed_plugins.append(plugin_name_to_update)
+                    supports_download_url = "download_url" in inspect.signature(
+                        update_method
+                    ).parameters
+                except (TypeError, ValueError):
+                    supports_download_url = False
 
-                except Exception as e:
-                    error_msg.append(f"更新插件 {plugin_name_to_update} 失败: {str(e)}")
-                    failed_plugins.append(plugin_name_to_update)
-                    logger.error(f"更新失败: {traceback.format_exc()}")
+                succeeded_plugins: list[str] = []
+                failed_plugins: list[str] = []
+                error_messages: list[str] = []
 
-            # 构建最终的回复消息
-            final_reply_to_user = "\n".join(update_summary_messages)
-            if error_msg:
-                final_reply_to_user += (
-                    f"\n\n注意：部分插件更新失败：{str(failed_plugins)}。\n"
-                    + "\n".join(error_msg)
+                logger.info(
+                    f"发现 {len(check_result.updates)} 个需要更新的插件："
+                    f"{[plugin['name'] for plugin in check_result.updates]}。"
                 )
-                final_reply_to_user += "\n".join(error_msg)
-            if self.not_found_plugins_names:
-                final_reply_to_user += f"\n\n注意：插件{str(self.not_found_plugins_names)} 名称不一致，未能判断是否需要更新。\n"
-            final_reply_to_user += (
-                f"\n成功更新 {len(successed_plugins)} 个插件。\n{successed_plugins}"
+                for plugin in check_result.updates:
+                    plugin_name = plugin["name"]
+                    try:
+                        update_kwargs = {
+                            "plugin_name": plugin_name,
+                            "proxy": self.proxy_address,
+                        }
+                        if supports_download_url and plugin.get("download_url"):
+                            update_kwargs["download_url"] = plugin["download_url"]
+                        await update_method(**update_kwargs)
+                        version_change = (
+                            f"{plugin_name} ({plugin.get('version') or '?'} -> "
+                            f"{plugin.get('online_version') or '?'})"
+                        )
+                        succeeded_plugins.append(version_change)
+                        logger.info(f"插件更新成功：{version_change}")
+                    except Exception as exc:
+                        failed_plugins.append(plugin_name)
+                        error_messages.append(f"更新插件 {plugin_name} 失败：{exc}")
+                        logger.error(f"更新插件 {plugin_name} 失败：{traceback.format_exc()}")
+
+                lines = [f"发现 {len(check_result.updates)} 个插件需要更新。"]
+                if succeeded_plugins:
+                    lines.append(
+                        f"成功更新 {len(succeeded_plugins)} 个插件：\n"
+                        + "\n".join(succeeded_plugins)
+                    )
+                if failed_plugins:
+                    lines.append(
+                        f"有 {len(failed_plugins)} 个插件更新失败：{failed_plugins}\n"
+                        + "\n".join(error_messages)
+                    )
+                if notes:
+                    lines.append(notes)
+
+                need_to_restart = bool(succeeded_plugins and self.restart_mode)
+                if need_to_restart:
+                    lines.append("即将重启 AstrBot...")
+                return "\n\n".join(lines), need_to_restart
+            except Exception as exc:
+                logger.error(f"插件更新流程异常：{traceback.format_exc()}")
+                return f"插件更新流程异常终止：{exc}", False
+
+    @staticmethod
+    def _format_check_notes(result: UpdateCheckResult) -> str:
+        lines: list[str] = []
+        if result.ambiguous:
+            details = "; ".join(
+                f"{item['name']} -> {', '.join(item['candidates'])}"
+                for item in result.ambiguous
             )
-            if successed_plugins and self.restart_mode:
-                final_reply_to_user += "\n\n即将重启astrbot..."
-                need_to_restart = True
-            else:
-                need_to_restart = False
-
-            return final_reply_to_user, need_to_restart
-
-        except Exception as e:
-            logger.error(f"插件更新流程异常: {traceback.format_exc()}")
-            return f"插件更新流程异常终止: {e}", False
+            lines.append(f"同名匹配存在歧义，已安全跳过：{details}")
+        if result.not_found:
+            lines.append(
+                "未在插件市场找到："
+                + ", ".join(item["name"] for item in result.not_found)
+            )
+        if result.invalid_versions:
+            details = "; ".join(
+                f"{item['name']} ({item['version']} -> {item['online_version']})"
+                for item in result.invalid_versions
+            )
+            lines.append(f"版本号无法比较，已跳过：{details}")
+        return "\n".join(lines)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("更新所有插件", alias={"updateallplugins", "更新全部插件"})
     async def update_all_plugins_command(self, event: AstrMessageEvent):
-        """
-        当用户发送 "更新所有插件" 命令时，触发检查并更新所有需要更新的插件。
-        """
         logger.info("收到用户命令 '更新所有插件'。")
-        yield event.plain_result("正在检查并更新所有插件，请稍候...")
+        if self._update_lock.locked():
+            yield event.plain_result("已有一次插件更新检查正在执行，请稍后再试。")
+            return
 
-        # 调用核心更新逻辑，并将结果返回给用户
+        yield event.plain_result("正在检查并更新所有插件，请稍候...")
         result_message, need_to_restart = await self._check_and_perform_updates()
         yield event.plain_result(result_message).use_t2i(False)
         if need_to_restart:
             await self.restart_command()
 
-    async def _fetch_online_plugins(self):
-        """
-        异步从远程 URL 获取在线插件列表。
-        这部分代码基于你在 plugin.py 中提供的逻辑。
-        """
-        urls = [
-            "https://api.soulter.top/astrbot/plugins",
-            "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/raw/refs/heads/main/plugin_cache_original.json",
-        ]  # 创建列表，防止url出现变动 方便维护
-        remote_data = None
-
-        for url in urls:
-            try:
-                async with aiohttp.ClientSession() as session:
+    async def _fetch_online_plugins(self) -> object | None:
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            for url in MARKET_URLS:
+                try:
                     async with session.get(url) as response:
-                        if response.status == 200:
-                            remote_data = await response.json()
-                            if remote_data:
-                                logger.info("成功获取远程插件市场数据")
-                                return remote_data
-                        else:
-                            logger.error(f"请求 {url} 失败，状态码：{response.status}")
-            except Exception as e:
-                logger.error(f"请求 {url} 失败，错误：{e}")
-
-        logger.warning("远程插件市场数据获取失败")
+                        if response.status != 200:
+                            logger.warning(f"请求插件市场 {url} 失败，状态码：{response.status}")
+                            continue
+                        remote_data = await response.json(content_type=None)
+                        if isinstance(remote_data, (dict, list)) and remote_data:
+                            logger.info(f"成功从 {url} 获取插件市场数据。")
+                            return remote_data
+                        logger.warning(f"插件市场 {url} 返回了空数据或未知格式。")
+                except Exception as exc:
+                    logger.warning(f"请求插件市场 {url} 失败：{exc}")
+        logger.error("所有插件市场地址均请求失败。")
         return None
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("重启astrbot")
     async def restart_astrbot_command(self, event: AstrMessageEvent):
-        """
-        当用户发送 "重启astrbot" 命令时，触发重启操作。
-        """
         logger.info("收到用户命令 '重启astrbot'。")
         yield event.plain_result("正在重启，请稍候...")
-        await self.restart_command()
+        error_message = await self.restart_command(notify_admin=False)
+        if error_message:
+            yield event.plain_result(error_message)
 
-    async def get_need_update_plugins_list(self):
-        """
-        获取本地插件列表，并与在线版本进行比较，返回需要更新的插件名列表。
-        """
-        self.not_found_plugins_data = []
-        self.not_found_plugins_names = []
-        local_plugins_list = []
-        need_examine_list = self.context.get_all_stars()
-        for plugin in need_examine_list:
-            if plugin.name in self.black_plugin_list:
-                continue  # 跳过黑名单插件
-            if self.white_plugin_list and plugin.name not in self.white_plugin_list:
-                continue  # 白名单不为空时，跳过白名单外插件
-            local_plugins_list.append(
+    async def get_need_update_plugins_list(self) -> UpdateCheckResult:
+        local_plugins: list[dict[str, Any]] = []
+        for plugin in self.context.get_all_stars():
+            name = str(getattr(plugin, "name", "") or "").strip()
+            if not name or getattr(plugin, "reserved", False):
+                continue
+            if name in self.black_plugin_list:
+                continue
+            if self.white_plugin_list and name not in self.white_plugin_list:
+                continue
+            local_plugins.append(
                 {
-                    "name": plugin.name,
-                    "version": plugin.version,
-                    "author": plugin.author,
-                    "desc": plugin.desc,
-                    "repo": plugin.repo,
-                    "is_updatable": False,
-                    "online_version": "",
+                    "name": name,
+                    "version": str(getattr(plugin, "version", "") or "").strip(),
+                    "author": str(getattr(plugin, "author", "") or "").strip(),
+                    "repo": str(getattr(plugin, "repo", "") or "").strip(),
+                    "root_dir_name": str(
+                        getattr(plugin, "root_dir_name", "") or ""
+                    ).strip(),
                 }
             )
-        online_plugins_data = await self._fetch_online_plugins()
-        if self.test_mode:  # 调试模式
-            with open(
-                Path(__file__).resolve().parent / "test.md", "w", encoding="utf-8"
-            ) as f:
-                f.write(f"于{datetime.now()}记录\n\n")
-                f.write(f"本地插件列表：{local_plugins_list}\n\n")
-                f.write(f"在线插件市场数据：{online_plugins_data}\n\n")
-        if not online_plugins_data:
-            logger.warning("无法获取在线插件数据，跳过版本比较。")
-            return local_plugins_list
-        for p in local_plugins_list:
-            if p_name := p.get("name"):
-                online_plugin_data = (
-                    online_plugins_data.get(p_name)
-                    or online_plugins_data.get(p_name.lower())
-                    or online_plugins_data.get(p_name.replace("astrbot_plugin_", ""))
-                    or online_plugins_data.get(f"astrbot_plugin_{p_name}")
-                )
-            if not online_plugin_data and p.get("repo"):
-                online_plugin_data = online_plugins_data.get(p["repo"].split("/")[-1])
 
-            if online_plugin_data:
-                p["online_version"] = online_plugin_data.get("version", "")
-                try:
-                    if (
-                        VersionComparator.compare_version(
-                            p["version"], p["online_version"]
-                        )
-                        == -1
-                    ):
-                        p["is_updatable"] = True
-                    else:
-                        p["is_updatable"] = False
-                except Exception as e:
-                    logger.error(f"比较插件 {p['name']} 的版本时出错: {e}")
-                    p["is_updatable"] = False  # 发生错误时，保守地认为不可更新
-            elif (
-                "astrbot-" in p["name"]
-                or p["name"] == "astrbot"
-                or p["repo"] == "https://astrbot.app"
+        market_data = await self._fetch_online_plugins()
+        if market_data is None:
+            result = UpdateCheckResult(status="fetch_failed")
+            self._write_debug_data(local_plugins, market_data, result)
+            return result
+
+        market_index = build_market_index(market_data)
+        result = UpdateCheckResult(status="ok")
+        for plugin in local_plugins:
+            match = find_market_entry(plugin, market_index)
+            if match.status == "ambiguous":
+                result.ambiguous.append(
+                    {"name": plugin["name"], "candidates": match.candidates}
+                )
+                logger.warning(
+                    f"插件 {plugin['name']} 匹配到多个市场条目，已跳过：{match.candidates}"
+                )
+                continue
+            if match.status == "not_found" or not match.entry:
+                result.not_found.append(plugin)
+                logger.warning(f"插件 {plugin['name']} 不在在线插件市场中。")
+                continue
+
+            online_version = str(match.entry.get("version") or "").strip()
+            local_version_for_compare = clean_version(plugin["version"])
+            online_version_for_compare = clean_version(online_version)
+            if not is_valid_version(local_version_for_compare) or not is_valid_version(
+                online_version_for_compare
             ):
-                continue  # 跳过系统插件
-            else:
-                logger.warning(f"插件 {p['name']} 不在在线插件市场中。")
-                self.not_found_plugins_names.append(p["name"])
-                self.not_found_plugins_data.append(p)
-        if self.test_mode:  # 调试模式
-            with open(
-                Path(__file__).resolve().parent / "test.md", "a", encoding="utf-8"
-            ) as f:
-                f.write(f"最终列表：{local_plugins_list}\n\n")
-                f.write(f"名称不一致的插件信息：{self.not_found_plugins_data}\n\n")
-        return [p["name"] for p in local_plugins_list if p["is_updatable"]]
+                result.invalid_versions.append(
+                    {
+                        "name": plugin["name"],
+                        "version": plugin["version"],
+                        "online_version": online_version,
+                    }
+                )
+                continue
+
+            try:
+                is_updatable = (
+                    VersionComparator.compare_version(
+                        local_version_for_compare, online_version_for_compare
+                    )
+                    == -1
+                )
+            except Exception as exc:
+                logger.error(f"比较插件 {plugin['name']} 的版本时出错：{exc}")
+                result.invalid_versions.append(
+                    {
+                        "name": plugin["name"],
+                        "version": plugin["version"],
+                        "online_version": online_version,
+                    }
+                )
+                continue
+
+            if is_updatable:
+                result.updates.append(
+                    {
+                        **plugin,
+                        "online_version": online_version,
+                        "download_url": str(
+                            match.entry.get("download_url") or ""
+                        ).strip(),
+                        "market_id": match.entry.get("_market_id", ""),
+                        "matched_by": match.matched_by,
+                    }
+                )
+
+        self._write_debug_data(local_plugins, market_data, result)
+        return result
+
+    def _write_debug_data(
+        self,
+        local_plugins: list[dict[str, Any]],
+        market_data: object,
+        result: UpdateCheckResult,
+    ) -> None:
+        if not self.test_mode:
+            return
+        debug_path = Path(__file__).resolve().parent / "test.md"
+        try:
+            with debug_path.open("w", encoding="utf-8") as file:
+                file.write(f"于 {datetime.now().isoformat()} 记录\n\n")
+                file.write("## 本地插件\n\n")
+                file.write(json.dumps(local_plugins, ensure_ascii=False, indent=2))
+                file.write("\n\n## 市场数据\n\n")
+                file.write(json.dumps(market_data, ensure_ascii=False, indent=2))
+                file.write("\n\n## 检查结果\n\n")
+                file.write(json.dumps(asdict(result), ensure_ascii=False, indent=2))
+                file.write("\n")
+            logger.info(f"调试模式：已生成 {debug_path.name}。")
+        except Exception as exc:
+            logger.error(f"写入调试文件失败：{exc}")

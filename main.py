@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import aiohttp
 import astrbot.api.message_components as Comp
@@ -24,8 +25,12 @@ from .plugin_utils import (
     clean_version,
     find_market_entry,
     is_valid_version,
+    normalize_name,
+    normalize_repo,
     normalize_weekdays,
     parse_check_times,
+    parse_custom_source_bindings,
+    parse_plugin_metadata,
 )
 
 
@@ -48,13 +53,15 @@ class UpdateCheckResult:
     ambiguous: list[dict[str, Any]] = field(default_factory=list)
     not_found: list[dict[str, Any]] = field(default_factory=list)
     invalid_versions: list[dict[str, Any]] = field(default_factory=list)
+    custom_source_errors: list[dict[str, Any]] = field(default_factory=list)
+    market_fetch_failed: bool = False
 
 
 @register(
     "astrbot_plugin_update_manager",
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.4.0",
+    "2.4.1",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -74,6 +81,10 @@ class PluginUpdateManager(Star):
         self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
         self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
         self.restart_mode = self.config.get("restart_mode", False)
+        self.custom_plugin_sources = list(
+            self.config.get("custom_plugin_sources", []) or []
+        )
+        self._http_cache: dict[str, dict[str, Any]] = {}
 
         self.dashboard: DashboardClient | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -179,9 +190,23 @@ class PluginUpdateManager(Star):
         if not isinstance(schema, dict):
             return
 
+        custom_selected: list[str] = []
+        for item in self.custom_plugin_sources:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("plugin")
+            if isinstance(value, list):
+                custom_selected.extend(str(name) for name in value)
+            else:
+                custom_selected.append(str(value or ""))
+
         selected = {
             str(name)
-            for name in (*self.black_plugin_list, *self.white_plugin_list)
+            for name in (
+                *self.black_plugin_list,
+                *self.white_plugin_list,
+                *custom_selected,
+            )
             if str(name).strip()
         }
         labels_by_name: dict[str, str] = {}
@@ -208,6 +233,23 @@ class PluginUpdateManager(Star):
             if isinstance(item_schema, dict):
                 item_schema["options"] = options
                 item_schema["labels"] = labels
+
+        custom_schema = schema.get("custom_plugin_sources")
+        if not isinstance(custom_schema, dict):
+            return
+        templates = custom_schema.get("templates")
+        if not isinstance(templates, dict):
+            return
+        github_template = templates.get("github_metadata")
+        if not isinstance(github_template, dict):
+            return
+        template_items = github_template.get("items")
+        if not isinstance(template_items, dict):
+            return
+        plugin_item = template_items.get("plugin")
+        if isinstance(plugin_item, dict):
+            plugin_item["options"] = options
+            plugin_item["labels"] = labels
 
     @_compatible_filter_hook("on_plugin_loaded")
     async def on_plugin_loaded(self, metadata):
@@ -287,6 +329,13 @@ class PluginUpdateManager(Star):
                 for plugin in check_result.updates:
                     plugin_name = plugin["name"]
                     try:
+                        if (
+                            plugin.get("source_type") == "custom"
+                            and not supports_download_url
+                        ):
+                            raise RuntimeError(
+                                "当前 AstrBot 版本不支持按固定下载地址更新自定义源"
+                            )
                         update_kwargs = {
                             "plugin_name": plugin_name,
                             "proxy": self.proxy_address,
@@ -294,9 +343,14 @@ class PluginUpdateManager(Star):
                         if supports_download_url and plugin.get("download_url"):
                             update_kwargs["download_url"] = plugin["download_url"]
                         await update_method(**update_kwargs)
+                        source_label = (
+                            "自定义源"
+                            if plugin.get("source_type") == "custom"
+                            else "插件市场"
+                        )
                         version_change = (
                             f"{plugin_name} ({plugin.get('version') or '?'} -> "
-                            f"{plugin.get('online_version') or '?'})"
+                            f"{plugin.get('online_version') or '?'}, {source_label})"
                         )
                         succeeded_plugins.append(version_change)
                         logger.info(f"插件更新成功：{version_change}")
@@ -347,6 +401,14 @@ class PluginUpdateManager(Star):
                 for item in result.invalid_versions
             )
             lines.append(f"版本号无法比较，已跳过：{details}")
+        if result.custom_source_errors:
+            details = "; ".join(
+                f"{item.get('plugin') or '未命名绑定'} -> {item['error']}"
+                for item in result.custom_source_errors
+            )
+            lines.append(f"自定义更新源检查失败，已跳过：{details}")
+        if result.market_fetch_failed:
+            lines.append("插件市场请求失败，市场插件本次未检查。")
         return "\n".join(lines)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -382,6 +444,95 @@ class PluginUpdateManager(Star):
         logger.error("所有插件市场地址均请求失败。")
         return None
 
+    @staticmethod
+    def _github_api_headers() -> dict[str, str]:
+        return {
+            "Accept": "application/vnd.github+json",
+            "X-GitHub-Api-Version": "2022-11-28",
+            "User-Agent": "astrbot-plugin-update-manager",
+        }
+
+    async def _fetch_text_cached(
+        self, session: aiohttp.ClientSession, url: str
+    ) -> str:
+        headers = self._github_api_headers()
+        cached = self._http_cache.get(url)
+        if cached and cached.get("etag"):
+            headers["If-None-Match"] = str(cached["etag"])
+
+        async with session.get(url, headers=headers) as response:
+            if response.status == 304 and cached:
+                return str(cached["value"])
+            if response.status != 200:
+                message = (await response.text())[:200].strip()
+                raise RuntimeError(f"GitHub 请求失败（{response.status}）：{message}")
+            value = await response.text()
+            self._http_cache[url] = {
+                "etag": response.headers.get("ETag", ""),
+                "value": value,
+            }
+            return value
+
+    async def _fetch_json_cached(
+        self, session: aiohttp.ClientSession, url: str
+    ) -> dict[str, Any]:
+        text = await self._fetch_text_cached(session, url)
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError("GitHub 返回了无法解析的 JSON") from exc
+        if not isinstance(value, dict):
+            raise RuntimeError("GitHub 返回了未知数据格式")
+        return value
+
+    async def _fetch_custom_source(
+        self,
+        session: aiohttp.ClientSession,
+        binding,
+    ) -> dict[str, str]:
+        repo_api = (
+            f"https://api.github.com/repos/{binding.owner}/{binding.repo}"
+        )
+        repo_info = await self._fetch_json_cached(session, repo_api)
+        target_ref = binding.branch or str(repo_info.get("default_branch") or "").strip()
+        if not target_ref:
+            raise RuntimeError("仓库没有可用的默认分支")
+
+        commit_api = f"{repo_api}/commits/{quote(target_ref, safe='')}"
+        commit_info = await self._fetch_json_cached(session, commit_api)
+        commit_sha = str(commit_info.get("sha") or "").strip()
+        if len(commit_sha) != 40:
+            raise RuntimeError("GitHub 未返回有效的提交 SHA")
+
+        metadata = None
+        metadata_error = None
+        for filename in ("metadata.yaml", "metadata.yml"):
+            raw_url = (
+                f"https://raw.githubusercontent.com/{binding.owner}/"
+                f"{binding.repo}/{commit_sha}/{filename}"
+            )
+            try:
+                metadata_text = await self._fetch_text_cached(session, raw_url)
+                metadata = parse_plugin_metadata(metadata_text)
+                break
+            except Exception as exc:
+                metadata_error = exc
+        if not metadata:
+            raise RuntimeError(
+                f"无法读取 metadata.yaml 或 metadata.yml：{metadata_error}"
+            )
+
+        return {
+            **metadata,
+            "ref": target_ref,
+            "commit_sha": commit_sha,
+            "repo_url": binding.repo_url,
+            "download_url": (
+                f"https://github.com/{binding.owner}/{binding.repo}/archive/"
+                f"{commit_sha}.zip"
+            ),
+        }
+
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("重启astrbot")
     async def restart_astrbot_command(self, event: AstrMessageEvent):
@@ -390,6 +541,49 @@ class PluginUpdateManager(Star):
         error_message = await self.restart_command(notify_admin=False)
         if error_message:
             yield event.plain_result(error_message)
+
+    @staticmethod
+    def _append_version_update(
+        result: UpdateCheckResult,
+        plugin: dict[str, Any],
+        online_version: str,
+        **source_fields: Any,
+    ) -> None:
+        local_version = clean_version(plugin["version"])
+        remote_version = clean_version(online_version)
+        if not is_valid_version(local_version) or not is_valid_version(remote_version):
+            result.invalid_versions.append(
+                {
+                    "name": plugin["name"],
+                    "version": plugin["version"],
+                    "online_version": online_version,
+                }
+            )
+            return
+
+        try:
+            is_updatable = (
+                VersionComparator.compare_version(local_version, remote_version) == -1
+            )
+        except Exception as exc:
+            logger.error(f"比较插件 {plugin['name']} 的版本时出错：{exc}")
+            result.invalid_versions.append(
+                {
+                    "name": plugin["name"],
+                    "version": plugin["version"],
+                    "online_version": online_version,
+                }
+            )
+            return
+
+        if is_updatable:
+            result.updates.append(
+                {
+                    **plugin,
+                    "online_version": online_version,
+                    **source_fields,
+                }
+            )
 
     async def get_need_update_plugins_list(self) -> UpdateCheckResult:
         local_plugins: list[dict[str, Any]] = []
@@ -413,75 +607,101 @@ class PluginUpdateManager(Star):
                 }
             )
 
-        market_data = await self._fetch_online_plugins()
-        if market_data is None:
-            result = UpdateCheckResult(status="fetch_failed")
-            self._write_debug_data(local_plugins, market_data, result)
-            return result
-
-        market_index = build_market_index(market_data)
-        result = UpdateCheckResult(status="ok")
-        for plugin in local_plugins:
-            match = find_market_entry(plugin, market_index)
-            if match.status == "ambiguous":
-                result.ambiguous.append(
-                    {"name": plugin["name"], "candidates": match.candidates}
-                )
-                logger.warning(
-                    f"插件 {plugin['name']} 匹配到多个市场条目，已跳过：{match.candidates}"
-                )
-                continue
-            if match.status == "not_found" or not match.entry:
-                result.not_found.append(plugin)
-                logger.warning(f"插件 {plugin['name']} 不在在线插件市场中。")
-                continue
-
-            online_version = str(match.entry.get("version") or "").strip()
-            local_version_for_compare = clean_version(plugin["version"])
-            online_version_for_compare = clean_version(online_version)
-            if not is_valid_version(local_version_for_compare) or not is_valid_version(
-                online_version_for_compare
-            ):
-                result.invalid_versions.append(
+        bindings, claimed_plugins, config_errors = parse_custom_source_bindings(
+            self.custom_plugin_sources
+        )
+        result = UpdateCheckResult(
+            status="ok", custom_source_errors=list(config_errors)
+        )
+        local_by_name = {plugin["name"]: plugin for plugin in local_plugins}
+        for plugin_name in sorted(claimed_plugins):
+            if plugin_name not in local_by_name:
+                result.custom_source_errors.append(
                     {
-                        "name": plugin["name"],
-                        "version": plugin["version"],
-                        "online_version": online_version,
+                        "plugin": plugin_name,
+                        "error": "绑定的插件当前未加载，已跳过",
                     }
                 )
-                continue
 
-            try:
-                is_updatable = (
-                    VersionComparator.compare_version(
-                        local_version_for_compare, online_version_for_compare
+        timeout = aiohttp.ClientTimeout(total=30)
+        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+            for plugin_name, binding in bindings.items():
+                plugin = local_by_name.get(plugin_name)
+                if not plugin:
+                    continue
+                try:
+                    remote = await self._fetch_custom_source(session, binding)
+                    if normalize_name(remote["name"]) != normalize_name(plugin_name):
+                        raise RuntimeError(
+                            f"远端插件名 {remote['name']} 与本地插件名不一致"
+                        )
+                    remote_repo = normalize_repo(remote.get("repo"))
+                    if remote_repo and remote_repo != binding.repo_id.lower():
+                        raise RuntimeError(
+                            f"metadata 中的仓库 {remote['repo']} 与绑定仓库不一致"
+                        )
+                    self._append_version_update(
+                        result,
+                        plugin,
+                        remote["version"],
+                        download_url=remote["download_url"],
+                        source_type="custom",
+                        source_repo=remote["repo_url"],
+                        source_ref=remote["ref"],
+                        commit_sha=remote["commit_sha"],
+                        matched_by="custom_binding",
                     )
-                    == -1
-                )
-            except Exception as exc:
-                logger.error(f"比较插件 {plugin['name']} 的版本时出错：{exc}")
-                result.invalid_versions.append(
-                    {
-                        "name": plugin["name"],
-                        "version": plugin["version"],
-                        "online_version": online_version,
-                    }
-                )
-                continue
+                except Exception as exc:
+                    result.custom_source_errors.append(
+                        {"plugin": plugin_name, "error": str(exc)}
+                    )
+                    logger.warning(
+                        f"插件 {plugin_name} 的自定义更新源检查失败，已跳过：{exc}"
+                    )
 
-            if is_updatable:
-                result.updates.append(
-                    {
-                        **plugin,
-                        "online_version": online_version,
-                        "download_url": str(
+        market_plugins = [
+            plugin for plugin in local_plugins if plugin["name"] not in claimed_plugins
+        ]
+        market_data: object | None = None
+        if market_plugins:
+            market_data = await self._fetch_online_plugins()
+            if market_data is None:
+                result.market_fetch_failed = True
+            else:
+                market_index = build_market_index(market_data)
+                for plugin in market_plugins:
+                    match = find_market_entry(plugin, market_index)
+                    if match.status == "ambiguous":
+                        result.ambiguous.append(
+                            {"name": plugin["name"], "candidates": match.candidates}
+                        )
+                        logger.warning(
+                            f"插件 {plugin['name']} 匹配到多个市场条目，已跳过："
+                            f"{match.candidates}"
+                        )
+                        continue
+                    if match.status == "not_found" or not match.entry:
+                        result.not_found.append(plugin)
+                        logger.warning(f"插件 {plugin['name']} 不在在线插件市场中。")
+                        continue
+
+                    online_version = str(match.entry.get("version") or "").strip()
+                    self._append_version_update(
+                        result,
+                        plugin,
+                        online_version,
+                        download_url=str(
                             match.entry.get("download_url") or ""
                         ).strip(),
-                        "market_id": match.entry.get("_market_id", ""),
-                        "matched_by": match.matched_by,
-                    }
-                )
+                        source_type="market",
+                        market_id=match.entry.get("_market_id", ""),
+                        matched_by=match.matched_by,
+                    )
 
+        if result.market_fetch_failed and not bindings:
+            result.status = "fetch_failed"
+        elif result.market_fetch_failed or result.custom_source_errors:
+            result.status = "partial"
         self._write_debug_data(local_plugins, market_data, result)
         return result
 

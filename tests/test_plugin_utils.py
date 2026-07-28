@@ -8,6 +8,9 @@ from plugin_utils import (
     normalize_repo,
     normalize_weekdays,
     parse_check_times,
+    parse_custom_source_bindings,
+    parse_github_repo_url,
+    parse_plugin_metadata,
 )
 
 
@@ -131,6 +134,67 @@ class NormalizationTests(unittest.TestCase):
     def test_invalid_version_is_rejected(self):
         self.assertTrue(is_valid_version("v2.4.0-beta.1"))
         self.assertFalse(is_valid_version("development"))
+
+
+class CustomSourceTests(unittest.TestCase):
+    def test_standard_github_repo_url_is_parsed(self):
+        self.assertEqual(
+            parse_github_repo_url("https://github.com/Owner/Repo.git"),
+            ("Owner", "Repo"),
+        )
+
+    def test_repository_subpage_and_proxy_are_rejected(self):
+        self.assertIsNone(parse_github_repo_url("https://github.com/Owner/Repo/tree/main"))
+        self.assertIsNone(
+            parse_github_repo_url("https://gh-proxy.com/https://github.com/Owner/Repo")
+        )
+
+    def test_single_selected_plugin_creates_binding(self):
+        bindings, claimed, errors = parse_custom_source_bindings([
+            {
+                "plugin": ["astrbot_plugin_demo"],
+                "repo": "https://github.com/Owner/Repo",
+                "branch": "develop",
+            }
+        ])
+        self.assertFalse(errors)
+        self.assertEqual(claimed, {"astrbot_plugin_demo"})
+        self.assertEqual(bindings["astrbot_plugin_demo"].repo_id, "Owner/Repo")
+        self.assertEqual(bindings["astrbot_plugin_demo"].branch, "develop")
+
+    def test_multiple_selected_plugins_are_rejected(self):
+        bindings, claimed, errors = parse_custom_source_bindings([
+            {
+                "plugin": ["plugin_a", "plugin_b"],
+                "repo": "https://github.com/Owner/Repo",
+            }
+        ])
+        self.assertFalse(bindings)
+        self.assertEqual(claimed, {"plugin_a", "plugin_b"})
+        self.assertIn("只能选择一个", errors[0]["error"])
+
+    def test_duplicate_bindings_are_all_disabled(self):
+        bindings, claimed, errors = parse_custom_source_bindings([
+            {"plugin": "plugin_a", "repo": "https://github.com/A/One"},
+            {"plugin": "plugin_a", "repo": "https://github.com/B/Two"},
+        ])
+        self.assertFalse(bindings)
+        self.assertEqual(claimed, {"plugin_a"})
+        self.assertIn("只能绑定一个", errors[0]["error"])
+
+    def test_metadata_yaml_is_parsed(self):
+        metadata = parse_plugin_metadata(
+            "name: astrbot_plugin_demo\nversion: v1.2.3\n"
+            "repo: https://github.com/Owner/Repo\n"
+        )
+        self.assertEqual(metadata["name"], "astrbot_plugin_demo")
+        self.assertEqual(metadata["version"], "v1.2.3")
+
+    def test_metadata_requires_name_and_version(self):
+        with self.assertRaisesRegex(ValueError, "缺少 version"):
+            parse_plugin_metadata("name: astrbot_plugin_demo\n")
+        with self.assertRaisesRegex(ValueError, "不是对象"):
+            parse_plugin_metadata("- item\n")
 
 
 class ScheduleParsingTests(unittest.TestCase):

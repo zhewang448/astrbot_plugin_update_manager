@@ -9,7 +9,6 @@ import jwt
 
 from astrbot.api import logger
 from astrbot.core.star.context import Context
-from astrbot.core.star.star import StarMetadata
 
 
 class DashboardClient:
@@ -21,8 +20,6 @@ class DashboardClient:
 
     def __init__(self, context: Context):
         self.context = context
-        self.stars: list[StarMetadata] = context.get_all_stars()
-        self.star_manager = self.context._star_manager
 
         dbc = context.get_config().get("dashboard", {})
         self.host = dbc.get("host", "127.0.0.1")
@@ -35,11 +32,15 @@ class DashboardClient:
         self._session: aiohttp.ClientSession | None = None
 
     async def initialize(self):
-        self._session = aiohttp.ClientSession()
+        if self._session and not self._session.closed:
+            return
+        timeout = aiohttp.ClientTimeout(total=15)
+        self._session = aiohttp.ClientSession(timeout=timeout)
 
     async def terminate(self):
         if self._session and not self._session.closed:
             await self._session.close()
+        self._session = None
 
     async def restart(self) -> None:
         """重启 AstrBot 核心。"""
@@ -54,8 +55,8 @@ class DashboardClient:
         **kwargs,
     ) -> dict[str, Any] | None:
         """统一发送带本地 Dashboard 鉴权的请求。"""
-        if self._session is None:
-            raise RuntimeError("请先用 DashboardClient.initialize() 初始化会话")
+        if self._session is None or self._session.closed:
+            await self.initialize()
 
         headers = {"Authorization": f"Bearer {self._generate_jwt()}"}
         async with self._session.request(
@@ -64,7 +65,9 @@ class DashboardClient:
             if resp.status != 200:
                 raise RuntimeError(f"请求失败 [{resp.status}]: {await resp.text()}")
 
-            body = await resp.json()
+            body = await resp.json(content_type=None)
+            if not isinstance(body, dict):
+                raise RuntimeError("Dashboard 返回了未知数据格式")
             if body.get("status") != "ok":
                 raise RuntimeError(
                     f"业务错误: {body.get('message') or body.get('msg')}"
@@ -73,7 +76,7 @@ class DashboardClient:
 
     def _generate_jwt(self) -> str:
         """使用 AstrBot 本地配置生成 Dashboard JWT。"""
-        dbc = self.context.get_config()["dashboard"]
+        dbc = self.context.get_config().get("dashboard", {})
         username = dbc.get("username")
         jwt_secret = dbc.get("jwt_secret")
         if not username or not jwt_secret:
@@ -85,4 +88,5 @@ class DashboardClient:
             + datetime.timedelta(minutes=5),
         }
         logger.debug("已为重启请求生成本地 Dashboard JWT")
-        return jwt.encode(payload, jwt_secret, algorithm="HS256")
+        token = jwt.encode(payload, jwt_secret, algorithm="HS256")
+        return token.decode("utf-8") if isinstance(token, bytes) else token

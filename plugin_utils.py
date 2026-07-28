@@ -42,7 +42,8 @@ def normalize_repo(value: object) -> str:
         return ""
 
     github_match = re.search(
-        r"github\.com(?::|/)+(?P<owner>[^/?#]+)/(?P<repo>[^/?#]+)",
+        r"(?<![A-Za-z0-9.-])(?:www\.)?github\.com(?::|/)+"
+        r"(?P<owner>[^/?#]+)/(?P<repo>[^/?#]+)",
         raw,
         flags=re.IGNORECASE,
     )
@@ -62,6 +63,139 @@ def normalize_repo(value: object) -> str:
     return "/".join(part for part in (host, normalized_path) if part)
 
 
+<<<<<<< Updated upstream
+=======
+def parse_github_repo_url(value: object) -> tuple[str, str] | None:
+    """解析标准 GitHub 仓库地址，不接受代理地址和仓库内页面地址。"""
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = f"https://{raw}"
+
+    parsed = urlparse(raw)
+    host = parsed.netloc.lower().removeprefix("www.")
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if host != "github.com" or len(parts) != 2:
+        return None
+
+    owner = parts[0].strip()
+    repo = re.sub(r"\.git$", "", parts[1].strip(), flags=re.I)
+    github_name = re.compile(r"^[A-Za-z0-9_.-]+$")
+    if not owner or not repo or not github_name.fullmatch(owner):
+        return None
+    if not github_name.fullmatch(repo):
+        return None
+    return owner, repo
+
+
+def parse_custom_source_bindings(
+    values: object,
+) -> tuple[dict[str, CustomSourceBinding], set[str], list[dict[str, str]]]:
+    """校验自定义源配置，并返回有效绑定、已占用插件名和错误。"""
+    if not isinstance(values, list):
+        return {}, set(), [{"plugin": "", "error": "配置不是列表"}]
+
+    bindings: dict[str, CustomSourceBinding] = {}
+    claimed_plugins: set[str] = set()
+    errors: list[dict[str, str]] = []
+    duplicate_plugins: set[str] = set()
+
+    for index, item in enumerate(values, start=1):
+        if not isinstance(item, dict):
+            errors.append({"plugin": "", "error": f"第 {index} 项不是有效对象"})
+            continue
+
+        plugin_value = item.get("plugin")
+        if isinstance(plugin_value, list):
+            selected = [str(value or "").strip() for value in plugin_value]
+            selected = [value for value in selected if value]
+            claimed_plugins.update(selected)
+            if len(selected) != 1:
+                errors.append(
+                    {
+                        "plugin": ", ".join(selected),
+                        "error": "每条绑定必须且只能选择一个本地插件",
+                    }
+                )
+                continue
+            plugin = selected[0]
+        else:
+            plugin = str(plugin_value or "").strip()
+
+        repo_url = str(item.get("repo") or "").strip()
+        branch = str(item.get("branch") or "").strip()
+        if plugin:
+            claimed_plugins.add(plugin)
+        if not plugin:
+            errors.append({"plugin": "", "error": f"第 {index} 项未选择本地插件"})
+            continue
+        if plugin in bindings or plugin in duplicate_plugins:
+            bindings.pop(plugin, None)
+            duplicate_plugins.add(plugin)
+            errors.append({"plugin": plugin, "error": "同一个插件只能绑定一个自定义源"})
+            continue
+
+        parsed_repo = parse_github_repo_url(repo_url)
+        if not parsed_repo:
+            errors.append(
+                {
+                    "plugin": plugin,
+                    "error": "仓库地址必须是 https://github.com/owner/repo",
+                }
+            )
+            continue
+        if branch and (any(char.isspace() for char in branch) or "\x00" in branch):
+            errors.append({"plugin": plugin, "error": "分支名称不能包含空白字符"})
+            continue
+
+        owner, repo = parsed_repo
+        bindings[plugin] = CustomSourceBinding(
+            plugin=plugin,
+            owner=owner,
+            repo=repo,
+            branch=branch,
+        )
+
+    return bindings, claimed_plugins, errors
+
+
+def parse_plugin_metadata(value: object) -> dict[str, str]:
+    """解析远端插件 metadata.yaml，并提取更新检查所需字段。"""
+    try:
+        data = yaml.safe_load(str(value or ""))
+    except yaml.YAMLError as exc:
+        raise ValueError(f"metadata YAML 解析失败：{exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("metadata 内容不是对象")
+
+    name_value = data.get("name")
+    version_value = data.get("version")
+    name = name_value.strip() if isinstance(name_value, str) else ""
+    version = version_value.strip() if isinstance(version_value, str) else ""
+    if not name:
+        raise ValueError("metadata 缺少有效的字符串字段 name")
+    if not version:
+        raise ValueError("metadata 缺少有效的字符串字段 version")
+
+    optional_fields: dict[str, str] = {}
+    for field_name in ("author", "repo"):
+        field_value = data.get(field_name)
+        if field_value is None:
+            optional_fields[field_name] = ""
+        elif isinstance(field_value, str):
+            optional_fields[field_name] = field_value.strip()
+        else:
+            raise ValueError(f"metadata 字段 {field_name} 必须是字符串")
+
+    return {
+        "name": name,
+        "version": version,
+        **optional_fields,
+    }
+
+
+>>>>>>> Stashed changes
 def clean_version(value: object) -> str:
     return re.sub(r"^[vV]", "", str(value or "").strip())
 

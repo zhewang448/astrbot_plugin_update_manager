@@ -89,6 +89,41 @@
     "hint": "例如 https://gh-proxy.com，不填则不使用；市场 download_url 可用时会优先使用市场安装包",
     "default": ""
   },
+  "custom_plugin_sources": {
+    "description": "自定义插件更新源",
+    "type": "template_list",
+    "hint": "绑定未进入插件市场的 GitHub 插件；绑定后该插件优先使用自定义源",
+    "default": [],
+    "templates": {
+      "github_metadata": {
+        "name": "GitHub metadata.yaml",
+        "hint": "从指定仓库读取 metadata.yaml 或 metadata.yml 中的版本",
+        "display_item": "repo",
+        "items": {
+          "plugin": {
+            "description": "本地插件",
+            "type": "list",
+            "options": [],
+            "labels": [],
+            "hint": "搜索并选择一个已安装插件；每条绑定只能选择一个",
+            "default": []
+          },
+          "repo": {
+            "description": "GitHub 仓库",
+            "type": "string",
+            "hint": "格式：https://github.com/owner/repo",
+            "default": ""
+          },
+          "branch": {
+            "description": "分支",
+            "type": "string",
+            "hint": "留空则自动使用仓库默认分支",
+            "default": ""
+          }
+        }
+      }
+    }
+  },
   "white_plugin_list": {
     "description": "白名单插件",
     "type": "list",
@@ -102,7 +137,7 @@
     "type": "list",
     "options": [],
     "labels": [],
-    "hint": "可搜索并多选；测试分支、自定义来源或不希望自动更新的插件请加入黑名单",
+    "hint": "可搜索并多选；测试分支或不希望自动更新的插件请加入黑名单",
     "default": []
   },
   "restart_mode": {

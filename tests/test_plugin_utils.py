@@ -8,6 +8,9 @@ from plugin_utils import (
     normalize_repo,
     normalize_weekdays,
     parse_check_times,
+    parse_custom_source_bindings,
+    parse_github_repo_url,
+    parse_plugin_metadata,
 )
 
 
@@ -145,8 +148,6 @@ class NormalizationTests(unittest.TestCase):
         self.assertFalse(is_valid_version("development"))
 
 
-<<<<<<< Updated upstream
-=======
 class CustomSourceTests(unittest.TestCase):
     def test_standard_github_repo_url_is_parsed(self):
         self.assertEqual(
@@ -216,7 +217,6 @@ class CustomSourceTests(unittest.TestCase):
             )
 
 
->>>>>>> Stashed changes
 class ScheduleParsingTests(unittest.TestCase):
     def test_times_are_validated_deduplicated_and_sorted(self):
         valid, invalid = parse_check_times(

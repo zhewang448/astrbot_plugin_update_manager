@@ -1,4 +1,4 @@
-"""插件市场匹配和定时配置的纯函数工具。"""
+"""插件市场、自定义更新源和定时配置的纯函数工具。"""
 
 from __future__ import annotations
 
@@ -6,6 +6,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import unquote, urlparse
+
+import yaml
 
 
 PLUGIN_PREFIX = "astrbot_plugin_"
@@ -25,6 +27,22 @@ class MarketIndex:
     by_repo: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     by_author_name: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     by_name: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class CustomSourceBinding:
+    plugin: str
+    owner: str
+    repo: str
+    branch: str = ""
+
+    @property
+    def repo_url(self) -> str:
+        return f"https://github.com/{self.owner}/{self.repo}"
+
+    @property
+    def repo_id(self) -> str:
+        return f"{self.owner}/{self.repo}"
 
 
 def normalize_name(value: object) -> str:
@@ -63,8 +81,6 @@ def normalize_repo(value: object) -> str:
     return "/".join(part for part in (host, normalized_path) if part)
 
 
-<<<<<<< Updated upstream
-=======
 def parse_github_repo_url(value: object) -> tuple[str, str] | None:
     """解析标准 GitHub 仓库地址，不接受代理地址和仓库内页面地址。"""
     raw = str(value or "").strip()
@@ -195,7 +211,6 @@ def parse_plugin_metadata(value: object) -> dict[str, str]:
     }
 
 
->>>>>>> Stashed changes
 def clean_version(value: object) -> str:
     return re.sub(r"^[vV]", "", str(value or "").strip())
 

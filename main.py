@@ -235,16 +235,20 @@ class PluginUpdateManager(Star):
             except Exception as exc:
                 logger.error(f"定时任务：发送给管理员 {admin} 消息失败：{exc}")
 
-    async def restart_command(self):
+    async def restart_command(self, notify_admin: bool = True) -> str | None:
         try:
             if not self.dashboard:
                 self.dashboard = DashboardClient(self.context)
                 await self.dashboard.initialize()
             logger.info("准备执行重启...")
             await self.dashboard.restart()
+            return None
         except Exception as exc:
-            logger.error(f"重启失败：{exc}")
-            await self.send_message_to_admin([Comp.Plain(text=f"尝试重启失败：{exc}")])
+            error_message = f"尝试重启失败：{exc}"
+            logger.error(error_message)
+            if notify_admin:
+                await self.send_message_to_admin([Comp.Plain(text=error_message)])
+            return error_message
 
     async def _check_and_perform_updates(self) -> tuple[str, bool]:
         if self._update_lock.locked():
@@ -383,7 +387,9 @@ class PluginUpdateManager(Star):
     async def restart_astrbot_command(self, event: AstrMessageEvent):
         logger.info("收到用户命令 '重启astrbot'。")
         yield event.plain_result("正在重启，请稍候...")
-        await self.restart_command()
+        error_message = await self.restart_command(notify_admin=False)
+        if error_message:
+            yield event.plain_result(error_message)
 
     async def get_need_update_plugins_list(self) -> UpdateCheckResult:
         local_plugins: list[dict[str, Any]] = []

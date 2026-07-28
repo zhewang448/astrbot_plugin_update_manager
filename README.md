@@ -4,6 +4,9 @@
 
 ## v2.4.0 更新内容
 
+- 修复新版 AstrBot 中 Dashboard 密码存储及登录验证方式变化导致的重启失效。
+- 重启请求改用 AstrBot 本地 Dashboard JWT，不受密码哈希或 TOTP 登录影响。
+
 - 适配新版插件市场的“作者/插件名”数据格式，并跳过市场元数据项。
 - 市场匹配按“仓库地址 -> 作者与插件名 -> 唯一名称”依次判断。
 - 同名候选不唯一时不再猜测，明确提示歧义并安全跳过。
@@ -80,8 +83,9 @@
 - 市场提供 download_url 时，新版 AstrBot 会优先下载对应安装包，此时 github_proxy 不参与该安装包下载。
 - 插件市场不可访问时，本次检查会终止并明确提示，不会执行更新。
 - 插件版本无法比较、市场不存在或匹配有歧义时，会跳过该插件并在结果中说明。
-- 重启功能依赖 AstrBot Dashboard 配置可用。
+- 重启功能通过 AstrBot 本地 Dashboard 接口完成，不需要安装其他重启插件。
 
 ## 致谢
 
-重启功能参考并移植自 Zhalslar 的 astrbot_plugin_restart 项目。感谢原作者的开源贡献。
+重启功能参考并移植自 [Zhalslar](https://github.com/Zhalslar) 的
+[`astrbot_plugin_restart`](https://github.com/Zhalslar/astrbot_plugin_restart) 项目。感谢原作者的开源贡献。

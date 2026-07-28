@@ -1,44 +1,120 @@
 {
-  "interval_hours": { 
-      "description": "检查更新间隔,填0则不启用定时检查", 
-      "type": "float",
-      "hint": "可为浮点数（小时）", 
-      "default": 24
+  "schedule_mode": {
+    "description": "定时检查方式",
+    "type": "string",
+    "options": [
+      "interval",
+      "calendar"
+    ],
+    "labels": [
+      "方式 1：固定间隔",
+      "方式 2：指定星期和时间"
+    ],
+    "hint": "方式 1 保持原有行为；方式 2 可选择每周哪些天、每天哪些时间检查",
+    "default": "interval"
   },
-  "admin_sid_list":{
-      "description": "管理员sid列表",
-      "type": "list",
-      "hint": "字符串,在对应会话发送/sid获得",
-      "default": []
+  "interval_hours": {
+    "description": "固定检查间隔（小时）",
+    "type": "float",
+    "hint": "AstrBot 启动后每隔 N 小时检查一次，可为浮点数；填 0 则停用定时检查",
+    "default": 24,
+    "condition": {
+      "schedule_mode": "interval"
+    }
+  },
+  "check_weekdays": {
+    "description": "每周检查日期",
+    "type": "list",
+    "options": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri",
+      "sat",
+      "sun"
+    ],
+    "labels": [
+      "星期一",
+      "星期二",
+      "星期三",
+      "星期四",
+      "星期五",
+      "星期六",
+      "星期日"
+    ],
+    "hint": "可搜索并多选；至少选择一天",
+    "default": [
+      "mon",
+      "tue",
+      "wed",
+      "thu",
+      "fri",
+      "sat",
+      "sun"
+    ],
+    "condition": {
+      "schedule_mode": "calendar"
+    }
+  },
+  "check_times": {
+    "description": "每日检查时间",
+    "type": "list",
+    "hint": "可填写多个时间，每项使用 24 小时制 HH:MM，例如 04:00、16:30",
+    "default": [
+      "04:00"
+    ],
+    "condition": {
+      "schedule_mode": "calendar"
+    }
+  },
+  "check_on_startup": {
+    "description": "启动后立即检查一次",
+    "type": "bool",
+    "hint": "仅用于方式 2；不会补跑启动前错过的任务",
+    "default": false,
+    "condition": {
+      "schedule_mode": "calendar"
+    }
+  },
+  "admin_sid_list": {
+    "description": "管理员 SID 列表",
+    "type": "list",
+    "hint": "定时检查结束后向这些会话发送结果；可在对应会话发送 /sid 获取",
+    "default": []
   },
   "github_proxy": {
-      "description": "GitHub 加速地址",
-      "type": "string",
-      "hint": "参考设置中的网址，如 https://gh-proxy.com，不填则不使用",
-      "default":""
+    "description": "GitHub 加速地址",
+    "type": "string",
+    "hint": "例如 https://gh-proxy.com，不填则不使用；市场 download_url 可用时会优先使用市场安装包",
+    "default": ""
   },
   "white_plugin_list": {
-      "description": "白名单插件列表",
-      "type": "list",
-      "hint": "只有列表中的插件会被检查更新，不填则不启用",
-      "default": []
+    "description": "白名单插件",
+    "type": "list",
+    "options": [],
+    "labels": [],
+    "hint": "可搜索并多选；非空时只检查选中的插件",
+    "default": []
   },
   "black_plugin_list": {
-      "description": "黑名单插件列表",
-      "type": "list",
-      "hint": "列表中的插件不会被检查更新",
-      "default": []
+    "description": "黑名单插件",
+    "type": "list",
+    "options": [],
+    "labels": [],
+    "hint": "可搜索并多选；测试分支、自定义来源或不希望自动更新的插件请加入黑名单",
+    "default": []
   },
   "restart_mode": {
-      "description": "更新插件后是否重启astrbot",
-      "type": "bool",
-      "default": false
+    "description": "更新成功后重启 AstrBot",
+    "type": "bool",
+    "default": false
   },
   "test_mode": {
-      "description": "测试模式",
-      "type": "bool",
-      "hint": "在插件目录中的test.md中输出调试数据",
-      "default": false,
-      "invisible": false
+    "description": "测试模式",
+    "type": "bool",
+    "hint": "在插件目录的 test.md 中输出本地插件、市场数据和匹配结果",
+    "default": false,
+    "invisible": false
   }
 }

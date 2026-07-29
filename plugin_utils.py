@@ -60,7 +60,8 @@ def normalize_repo(value: object) -> str:
         return ""
 
     github_match = re.search(
-        r"github\.com(?::|/)+(?P<owner>[^/?#]+)/(?P<repo>[^/?#]+)",
+        r"(?<![A-Za-z0-9.-])(?:www\.)?github\.com(?::|/)+"
+        r"(?P<owner>[^/?#]+)/(?P<repo>[^/?#]+)",
         raw,
         flags=re.IGNORECASE,
     )
@@ -184,17 +185,29 @@ def parse_plugin_metadata(value: object) -> dict[str, str]:
     if not isinstance(data, dict):
         raise ValueError("metadata 内容不是对象")
 
-    name = str(data.get("name") or "").strip()
-    version = str(data.get("version") or "").strip()
+    name_value = data.get("name")
+    version_value = data.get("version")
+    name = name_value.strip() if isinstance(name_value, str) else ""
+    version = version_value.strip() if isinstance(version_value, str) else ""
     if not name:
-        raise ValueError("metadata 缺少 name")
+        raise ValueError("metadata 缺少有效的字符串字段 name")
     if not version:
-        raise ValueError("metadata 缺少 version")
+        raise ValueError("metadata 缺少有效的字符串字段 version")
+
+    optional_fields: dict[str, str] = {}
+    for field_name in ("author", "repo"):
+        field_value = data.get(field_name)
+        if field_value is None:
+            optional_fields[field_name] = ""
+        elif isinstance(field_value, str):
+            optional_fields[field_name] = field_value.strip()
+        else:
+            raise ValueError(f"metadata 字段 {field_name} 必须是字符串")
+
     return {
         "name": name,
         "version": version,
-        "author": str(data.get("author") or "").strip(),
-        "repo": str(data.get("repo") or "").strip(),
+        **optional_fields,
     }
 
 

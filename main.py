@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 import traceback
+from contextlib import suppress
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -44,6 +45,7 @@ MARKET_URLS = (
     "https://cloud.astrbot.app/api/v1/market/plugins.json",
     "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/raw/refs/heads/main/plugin_cache_original.json",
 )
+PLUGIN_NAME = "astrbot_plugin_update_manager"
 
 
 @dataclass
@@ -58,7 +60,7 @@ class UpdateCheckResult:
 
 
 @register(
-    "astrbot_plugin_update_manager",
+    PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
     "2.4.1",
@@ -108,11 +110,22 @@ class PluginUpdateManager(Star):
                 logger.error(f"插件更新管理器：重启模块初始化失败：{exc}")
 
         if self.schedule_mode == "calendar" and self.check_on_startup:
-            self._startup_task = asyncio.create_task(self._scheduled_update_check())
+            self._startup_task = asyncio.create_task(
+                self._scheduled_update_check(),
+                name=f"{PLUGIN_NAME}:startup-check",
+            )
 
     async def terminate(self):
-        if self._startup_task and not self._startup_task.done():
-            self._startup_task.cancel()
+        startup_task = self._startup_task
+        self._startup_task = None
+        if (
+            startup_task
+            and not startup_task.done()
+            and startup_task is not asyncio.current_task()
+        ):
+            startup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await startup_task
 
         if self.scheduler and self.scheduler.running:
             self.scheduler.shutdown(wait=False)
@@ -326,7 +339,11 @@ class PluginUpdateManager(Star):
                     f"发现 {len(check_result.updates)} 个需要更新的插件："
                     f"{[plugin['name'] for plugin in check_result.updates]}。"
                 )
-                for plugin in check_result.updates:
+                ordered_updates = sorted(
+                    check_result.updates,
+                    key=lambda plugin: plugin["name"] == PLUGIN_NAME,
+                )
+                for plugin in ordered_updates:
                     plugin_name = plugin["name"]
                     try:
                         if (
@@ -425,22 +442,22 @@ class PluginUpdateManager(Star):
         if need_to_restart:
             await self.restart_command()
 
-    async def _fetch_online_plugins(self) -> object | None:
-        timeout = aiohttp.ClientTimeout(total=30)
-        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-            for url in MARKET_URLS:
-                try:
-                    async with session.get(url) as response:
-                        if response.status != 200:
-                            logger.warning(f"请求插件市场 {url} 失败，状态码：{response.status}")
-                            continue
-                        remote_data = await response.json(content_type=None)
-                        if isinstance(remote_data, (dict, list)) and remote_data:
-                            logger.info(f"成功从 {url} 获取插件市场数据。")
-                            return remote_data
-                        logger.warning(f"插件市场 {url} 返回了空数据或未知格式。")
-                except Exception as exc:
-                    logger.warning(f"请求插件市场 {url} 失败：{exc}")
+    async def _fetch_online_plugins(
+        self, session: aiohttp.ClientSession
+    ) -> object | None:
+        for url in MARKET_URLS:
+            try:
+                async with session.get(url) as response:
+                    if response.status != 200:
+                        logger.warning(f"请求插件市场 {url} 失败，状态码：{response.status}")
+                        continue
+                    remote_data = await response.json(content_type=None)
+                    if isinstance(remote_data, (dict, list)) and remote_data:
+                        logger.info(f"成功从 {url} 获取插件市场数据。")
+                        return remote_data
+                    logger.warning(f"插件市场 {url} 返回了空数据或未知格式。")
+            except Exception as exc:
+                logger.warning(f"请求插件市场 {url} 失败：{exc}")
         logger.error("所有插件市场地址均请求失败。")
         return None
 
@@ -493,8 +510,10 @@ class PluginUpdateManager(Star):
         repo_api = (
             f"https://api.github.com/repos/{binding.owner}/{binding.repo}"
         )
-        repo_info = await self._fetch_json_cached(session, repo_api)
-        target_ref = binding.branch or str(repo_info.get("default_branch") or "").strip()
+        target_ref = binding.branch
+        if not target_ref:
+            repo_info = await self._fetch_json_cached(session, repo_api)
+            target_ref = str(repo_info.get("default_branch") or "").strip()
         if not target_ref:
             raise RuntimeError("仓库没有可用的默认分支")
 
@@ -623,6 +642,10 @@ class PluginUpdateManager(Star):
                     }
                 )
 
+        market_plugins = [
+            plugin for plugin in local_plugins if plugin["name"] not in claimed_plugins
+        ]
+        market_data: object | None = None
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
             for plugin_name, binding in bindings.items():
@@ -659,44 +682,44 @@ class PluginUpdateManager(Star):
                         f"插件 {plugin_name} 的自定义更新源检查失败，已跳过：{exc}"
                     )
 
-        market_plugins = [
-            plugin for plugin in local_plugins if plugin["name"] not in claimed_plugins
-        ]
-        market_data: object | None = None
-        if market_plugins:
-            market_data = await self._fetch_online_plugins()
-            if market_data is None:
-                result.market_fetch_failed = True
-            else:
-                market_index = build_market_index(market_data)
-                for plugin in market_plugins:
-                    match = find_market_entry(plugin, market_index)
-                    if match.status == "ambiguous":
-                        result.ambiguous.append(
-                            {"name": plugin["name"], "candidates": match.candidates}
-                        )
-                        logger.warning(
-                            f"插件 {plugin['name']} 匹配到多个市场条目，已跳过："
-                            f"{match.candidates}"
-                        )
-                        continue
-                    if match.status == "not_found" or not match.entry:
-                        result.not_found.append(plugin)
-                        logger.warning(f"插件 {plugin['name']} 不在在线插件市场中。")
-                        continue
+            if market_plugins:
+                market_data = await self._fetch_online_plugins(session)
+                if market_data is None:
+                    result.market_fetch_failed = True
+                else:
+                    market_index = build_market_index(market_data)
+                    for plugin in market_plugins:
+                        match = find_market_entry(plugin, market_index)
+                        if match.status == "ambiguous":
+                            result.ambiguous.append(
+                                {"name": plugin["name"], "candidates": match.candidates}
+                            )
+                            logger.warning(
+                                f"插件 {plugin['name']} 匹配到多个市场条目，已跳过："
+                                f"{match.candidates}"
+                            )
+                            continue
+                        if match.status == "not_found" or not match.entry:
+                            result.not_found.append(plugin)
+                            logger.warning(
+                                f"插件 {plugin['name']} 不在在线插件市场中。"
+                            )
+                            continue
 
-                    online_version = str(match.entry.get("version") or "").strip()
-                    self._append_version_update(
-                        result,
-                        plugin,
-                        online_version,
-                        download_url=str(
-                            match.entry.get("download_url") or ""
-                        ).strip(),
-                        source_type="market",
-                        market_id=match.entry.get("_market_id", ""),
-                        matched_by=match.matched_by,
-                    )
+                        online_version = str(
+                            match.entry.get("version") or ""
+                        ).strip()
+                        self._append_version_update(
+                            result,
+                            plugin,
+                            online_version,
+                            download_url=str(
+                                match.entry.get("download_url") or ""
+                            ).strip(),
+                            source_type="market",
+                            market_id=match.entry.get("_market_id", ""),
+                            matched_by=match.matched_by,
+                        )
 
         if result.market_fetch_failed and not bindings:
             result.status = "fetch_failed"

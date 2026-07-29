@@ -128,6 +128,18 @@ class NormalizationTests(unittest.TestCase):
             "owner/repo",
         )
 
+    def test_github_like_domain_is_not_treated_as_github(self):
+        self.assertEqual(
+            normalize_repo("https://notgithub.com/Owner/Repo"),
+            "notgithub.com/owner/repo",
+        )
+
+    def test_www_github_url_is_normalized(self):
+        self.assertEqual(
+            normalize_repo("https://www.github.com/Owner/Repo"),
+            "owner/repo",
+        )
+
     def test_version_prefix_is_removed(self):
         self.assertEqual(clean_version("V2.4.0"), "2.4.0")
 
@@ -191,10 +203,18 @@ class CustomSourceTests(unittest.TestCase):
         self.assertEqual(metadata["version"], "v1.2.3")
 
     def test_metadata_requires_name_and_version(self):
-        with self.assertRaisesRegex(ValueError, "缺少 version"):
+        with self.assertRaisesRegex(ValueError, "缺少.*version"):
             parse_plugin_metadata("name: astrbot_plugin_demo\n")
         with self.assertRaisesRegex(ValueError, "不是对象"):
             parse_plugin_metadata("- item\n")
+
+    def test_metadata_rejects_non_string_fields(self):
+        with self.assertRaisesRegex(ValueError, "字符串字段 version"):
+            parse_plugin_metadata("name: astrbot_plugin_demo\nversion: 1.10\n")
+        with self.assertRaisesRegex(ValueError, "字段 repo 必须是字符串"):
+            parse_plugin_metadata(
+                "name: astrbot_plugin_demo\nversion: v1.2.3\nrepo: 123\n"
+            )
 
 
 class ScheduleParsingTests(unittest.TestCase):

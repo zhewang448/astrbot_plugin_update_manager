@@ -66,6 +66,7 @@
 | `check_on_startup` | 方式 2 下启动后是否立即检查一次 |
 | `admin_sid_list` | 定时检查结束后接收结果的管理员会话 SID |
 | `github_proxy` | GitHub 加速地址，不填则不使用 |
+| `github_token` | 可选 GitHub API Token，用于提高 GitHub API 限额 |
 | `custom_plugin_sources` | 为已安装插件绑定 GitHub 仓库，可搜索选择本地插件 |
 | `white_plugin_list` | 非空时只检查所选插件，支持搜索和多选 |
 | `black_plugin_list` | 跳过所选插件，支持搜索和多选 |
@@ -130,6 +131,7 @@
 
 - 自动更新会修改插件文件。重要插件建议先备份。
 - 市场或自定义源提供固定安装包地址时，新版 AstrBot 会优先下载该安装包，此时 `github_proxy` 不参与该安装包下载。
+- GitHub API 出现 `403 rate limit exceeded` 时，在配置页填写 `github_token` 后重载插件；Token 仅用于 GitHub API 请求，不会写入日志。
 - 插件市场不可访问时会明确提示；已成功检查到的自定义源更新仍可继续执行。
 - 插件版本无法比较、市场不存在或匹配有歧义时，会跳过该插件并在结果中说明。
 - 重启功能通过 AstrBot 本地 Dashboard 接口完成，不需要安装其他重启插件。

@@ -78,6 +78,7 @@ class PluginUpdateManager(Star):
         self.check_times = self.config.get("check_times", ["04:00"])
         self.check_on_startup = self.config.get("check_on_startup", False)
         self.proxy_address = str(self.config.get("github_proxy", "") or "").strip()
+        self.github_token = str(self.config.get("github_token", "") or "").strip()
         self.test_mode = self.config.get("test_mode", False)
         self.black_plugin_list = list(self.config.get("black_plugin_list", []) or [])
         self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
@@ -461,13 +462,15 @@ class PluginUpdateManager(Star):
         logger.error("所有插件市场地址均请求失败。")
         return None
 
-    @staticmethod
-    def _github_api_headers() -> dict[str, str]:
-        return {
+    def _github_api_headers(self) -> dict[str, str]:
+        headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "astrbot-plugin-update-manager",
         }
+        if self.github_token:
+            headers["Authorization"] = f"Bearer {self.github_token}"
+        return headers
 
     async def _fetch_text_cached(
         self, session: aiohttp.ClientSession, url: str

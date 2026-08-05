@@ -89,6 +89,12 @@
     "hint": "例如 https://gh-proxy.com，不填则不使用；市场 download_url 可用时会优先使用市场安装包",
     "default": ""
   },
+  "github_token": {
+    "description": "GitHub API Token",
+    "type": "string",
+    "hint": "可选；填写 GitHub Personal Access Token（PAT）后用于提高 API 限额，建议使用最小权限 Token；留空则使用匿名请求",
+    "default": ""
+  },
   "custom_plugin_sources": {
     "description": "自定义插件更新源",
     "type": "template_list",

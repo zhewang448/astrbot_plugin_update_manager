@@ -1,3 +1,7 @@
+## v2.4.2
+
+- 新增 `github_token` 配置项，GitHub API 请求支持 Bearer Token，缓解匿名 API 限流。
+
 # 更新日志
 
 本文件记录 AstrBot 插件更新管理器的重要版本变化。

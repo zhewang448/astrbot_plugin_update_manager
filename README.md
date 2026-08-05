@@ -66,6 +66,7 @@
 | `check_on_startup` | 方式 2 下启动后是否立即检查一次 |
 | `admin_sid_list` | 定时检查结束后接收结果的管理员会话 SID |
 | `github_proxy` | GitHub 加速地址，不填则不使用 |
+| `github_token` | 可选 GitHub API Token，用于提高 GitHub API 限额 |
 | `custom_plugin_sources` | 为已安装插件绑定 GitHub 仓库，可搜索选择本地插件 |
 | `white_plugin_list` | 非空时只检查所选插件，支持搜索和多选 |
 | `black_plugin_list` | 跳过所选插件，支持搜索和多选 |
@@ -81,6 +82,18 @@
 1. 搜索并选择一个已安装插件。
 2. 填写标准 GitHub 仓库地址，例如 `https://github.com/owner/repo`。
 3. 分支可留空，插件会自动读取仓库默认分支；也可指定固定分支。
+
+### GitHub API 说明
+
+自定义更新源检查会通过 GitHub API 查询仓库默认分支和 commit。未填写 `github_token` 时使用匿名请求，频繁检查或多人共享同一出口 IP 时可能遇到 `403 rate limit exceeded`。
+
+如遇到 GitHub API 限流，可按以下步骤获取 Token：
+
+1. 登录 GitHub，进入头像菜单中的 **Settings → Developer settings → Personal access tokens → Fine-grained tokens**。
+2. 点击 **Generate new token**，为 Token 设置合适的有效期，并只授予目标仓库所需的只读权限；不需要授予写入或管理仓库权限。
+3. 创建后立即复制 Token，在插件配置的 `github_token` 中填写，然后重载插件。
+
+Token 仅用于 GitHub API 请求认证，不会显示在运行日志中。请勿将 Token 提交到公开仓库、发到聊天消息或截图中；如发生泄露，应立即在 GitHub 中撤销并重新生成。
 
 插件会读取远端 `metadata.yaml` 或 `metadata.yml` 的 `name`、`version`，与本地插件版本比较。发现新版本时会锁定检查时的 commit 下载，避免检查后仓库变化造成版本不一致。
 
@@ -104,32 +117,13 @@
 
 ## 更新日志
 
-### v2.4.1
-
-- 新增自定义 GitHub 插件更新源，可在配置页搜索并绑定已安装插件。
-- 读取远端 `metadata.yaml` 或 `metadata.yml` 比较版本，并锁定检查时的 commit 下载。
-- 支持自动识别默认分支或手动指定分支。
-- 自定义源优先于插件市场；单个来源失败不会阻断其他插件检查。
-
-### v2.4.0
-
-- 修复新版 AstrBot 中 Dashboard 密码存储及登录验证方式变化导致的重启失效。
-- 重启请求改用 AstrBot 本地 Dashboard JWT，不受密码哈希或 TOTP 登录影响。
-- 适配新版插件市场的“作者/插件名”数据格式，并跳过市场元数据项。
-- 市场匹配按“仓库地址 -> 作者与插件名 -> 唯一名称”依次判断。
-- 同名候选不唯一时不再猜测，明确提示歧义并安全跳过。
-- 市场请求失败会单独报错，不再误报“没有更新”。
-- 支持市场 `download_url`；旧版 AstrBot 不支持该参数时自动回退到仓库更新。
-- 黑白名单改为已安装插件的可搜索多选框，并保留当前未加载的历史选项。
-- 新增两种定时方式，配置页会根据所选方式显示对应设置。
-- 防止手动检查和定时检查同时执行，修复重复错误日志与结果摘要问题。
-
-历史版本记录请查看 [CHANGELOG.md](CHANGELOG.md)。
+版本变更记录请查看 [CHANGELOG.md](CHANGELOG.md)。
 
 ## 注意事项
 
 - 自动更新会修改插件文件。重要插件建议先备份。
 - 市场或自定义源提供固定安装包地址时，新版 AstrBot 会优先下载该安装包，此时 `github_proxy` 不参与该安装包下载。
+- GitHub API 出现 `403 rate limit exceeded` 时，在配置页填写 `github_token` 后重载插件；Token 仅用于 GitHub API 请求，不会写入日志。
 - 插件市场不可访问时会明确提示；已成功检查到的自定义源更新仍可继续执行。
 - 插件版本无法比较、市场不存在或匹配有歧义时，会跳过该插件并在结果中说明。
 - 重启功能通过 AstrBot 本地 Dashboard 接口完成，不需要安装其他重启插件。

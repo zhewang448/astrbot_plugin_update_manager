@@ -1066,8 +1066,7 @@ class PluginUpdateManager(Star):
             yield event.plain_result(
                 f"插件 {plugin_name} 重新安装成功（覆盖式）。\n"
                 f"来源：{source_label}\n"
-                f"代理：{proxy_status}\n"
-                f"提示：插件已覆盖安装，重载插件或重启 AstrBot 后生效。"
+                f"代理：{proxy_status}"
             ).use_t2i(False)
         except Exception as exc:
             logger.error(f"重新安装插件 {plugin_name} 失败：{traceback.format_exc()}")

@@ -550,6 +550,62 @@ def find_local_changelog(plugin_dir: object) -> Path | None:
     return None
 
 
+def normalize_github_url_to_archive(
+    url: str, default_branch: str = "main"
+) -> tuple[str, str, str] | None:
+    """将 GitHub 仓库 URL（含分支/tag/commit）转换为下载地址和元信息。
+
+    支持的输入格式：
+        - https://github.com/owner/repo
+        - https://github.com/owner/repo/tree/branch-name
+        - https://github.com/owner/repo/archive/refs/tags/v1.0.0.zip（已是归档地址，原样返回）
+        - github.com/owner/repo（自动补 https://）
+
+    返回 (owner, repo, archive_url) 或 None（无法解析时）。
+    archive_url 是可下载的 .zip 地址。
+
+    当输入不带分支/tag 时，使用 default_branch（默认 "main"）。
+    调用方可先用 GitHub API 查默认分支，传给这个函数。
+    """
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+
+    # 补全 scheme
+    if "://" not in raw:
+        raw = f"https://{raw}"
+
+    parsed = urlparse(raw)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host != "github.com":
+        return None
+
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    if len(parts) < 2:
+        return None
+
+    owner, repo = parts[0], parts[1]
+    # 去掉 .git 后缀
+    repo = re.sub(r"\.git$", "", repo, flags=re.IGNORECASE)
+
+    # 已经是 archive 地址？直接返回
+    if len(parts) >= 3 and parts[2] == "archive":
+        return (owner, repo, raw)
+
+    # 提取分支/tag/commit
+    ref = default_branch
+    if len(parts) >= 4:
+        segment_type = parts[2]  # tree / blob / commit / releases / ...
+        if segment_type in ("tree", "blob", "commit"):
+            ref = "/".join(parts[3:])  # 支持分支名里有斜杠
+        elif segment_type == "releases" and len(parts) >= 5 and parts[3] == "tag":
+            ref = f"refs/tags/{parts[4]}"
+
+    # 构造归档下载地址
+    archive_url = f"https://github.com/{owner}/{repo}/archive/{quote(ref, safe='')}.zip"
+    return (owner, repo, archive_url)
+
+
 def parse_check_times(values: object) -> tuple[list[str], list[str]]:
     if isinstance(values, str):
         values = [values]

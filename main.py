@@ -30,6 +30,7 @@ from .plugin_utils import (
     find_local_changelog,
     find_market_entry,
     is_valid_version,
+    normalize_github_url_to_archive,
     normalize_name,
     normalize_repo,
     normalize_weekdays,
@@ -921,33 +922,30 @@ class PluginUpdateManager(Star):
     @filter.command("重新安装插件", alias={"reinstallplugin"})
     async def reinstall_plugin_command(self, event: AstrMessageEvent):
         """强制重新下载并安装指定插件，不进行版本比较。"""
-        parts = str(getattr(event, "message_str", "") or "").strip().split(maxsplit=2)
+        parts = str(getattr(event, "message_str", "") or "").strip().split(maxsplit=3)
         if len(parts) < 2 or not parts[1].strip():
             yield event.plain_result(
-                "用法：重新安装插件 <插件名> [下载地址]\n"
-                "例如：重新安装插件 astrbot_plugin_demo\n"
-                "　　　重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/archive/main.zip\n"
+                "用法：重新安装插件 <插件名> [GitHub地址或下载URL] [--no-proxy]\n"
+                "例如：\n"
+                "  重新安装插件 astrbot_plugin_demo\n"
+                "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo\n"
+                "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev\n"
+                "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy\n"
+                "\n"
                 "不进行版本比较，直接重新下载覆盖安装。\n"
-                "指定下载地址时会优先使用该地址，否则自动从自定义源或插件市场获取。"
+                "第二个参数可以是：GitHub 仓库地址（自动转为下载链接）、直接下载地址（.zip）。\n"
+                "添加 --no-proxy 禁用 github_proxy 加速（默认启用）。"
             )
             return
 
         target_name = parts[1].strip()
-        custom_url = parts[2].strip() if len(parts) > 2 else ""
-
-        # 验证自定义 URL 格式
-        if custom_url:
-            parsed = urlparse(custom_url)
-            if parsed.scheme not in ("http", "https"):
-                yield event.plain_result(
-                    f"下载地址格式错误：{custom_url}\n"
-                    "必须是 http:// 或 https:// 开头的完整 URL。"
-                )
-                return
+        custom_url = parts[2].strip() if len(parts) > 2 and not parts[2].startswith("--") else ""
+        use_proxy = not any(p == "--no-proxy" for p in parts[2:])
 
         logger.info(
             f"收到用户命令 '重新安装插件 {target_name}'"
-            + (f"，指定下载地址：{custom_url}" if custom_url else "")
+            + (f"，指定地址：{custom_url}" if custom_url else "")
+            + f"，代理：{'启用' if use_proxy else '禁用'}"
         )
 
         # 在已加载插件中查找，支持大小写不敏感匹配
@@ -983,11 +981,46 @@ class PluginUpdateManager(Star):
 
         download_url = ""
         source_label = "仓库地址"
+        normalized_result = None
 
-        # 如果用户指定了下载地址，直接使用
+        # 如果用户指定了下载地址，先尝试标准化
         if custom_url:
-            download_url = custom_url
-            source_label = f"用户指定地址（{custom_url[:50]}...）" if len(custom_url) > 50 else f"用户指定地址"
+            # 尝试解析为 GitHub 仓库 URL
+            normalized_result = normalize_github_url_to_archive(custom_url)
+            if normalized_result:
+                owner, repo, archive_url = normalized_result
+                # 检查是否需要获取默认分支（用户只给了 owner/repo）
+                if "/tree/" not in custom_url and not custom_url.endswith(".zip"):
+                    # 用户给的是裸仓库地址，需要查默认分支
+                    try:
+                        timeout = aiohttp.ClientTimeout(total=15)
+                        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                            repo_api = f"https://api.github.com/repos/{owner}/{repo}"
+                            repo_info = await self._fetch_json_cached(session, repo_api)
+                            default_branch = str(repo_info.get("default_branch") or "main").strip()
+                            # 重新生成带默认分支的归档地址
+                            archive_url = f"https://github.com/{owner}/{repo}/archive/{quote(default_branch, safe='')}.zip"
+                            source_label = f"GitHub {owner}/{repo}@{default_branch}"
+                    except Exception as exc:
+                        logger.warning(f"获取默认分支失败，使用 main：{exc}")
+                        archive_url = f"https://github.com/{owner}/{repo}/archive/main.zip"
+                        source_label = f"GitHub {owner}/{repo}@main（兜底）"
+                else:
+                    # 用户明确指定了分支或已是 .zip
+                    source_label = f"用户指定（{custom_url[:60]}...）" if len(custom_url) > 60 else "用户指定"
+
+                download_url = archive_url
+            else:
+                # 不是 GitHub 地址，当作直接下载 URL
+                parsed = urlparse(custom_url)
+                if parsed.scheme not in ("http", "https"):
+                    yield event.plain_result(
+                        f"下载地址格式错误：{custom_url}\n"
+                        "必须是 http:// 或 https:// 开头的完整 URL，或 GitHub 仓库地址。"
+                    )
+                    return
+                download_url = custom_url
+                source_label = f"直接下载（{custom_url[:50]}...）" if len(custom_url) > 50 else "直接下载"
         else:
             # 否则自动获取下载地址
             timeout = aiohttp.ClientTimeout(total=30)
@@ -1017,7 +1050,8 @@ class PluginUpdateManager(Star):
 
         # 执行重新安装（覆盖式）
         try:
-            update_kwargs = {"plugin_name": plugin_name, "proxy": self.proxy_address}
+            proxy_to_use = self.proxy_address if use_proxy else ""
+            update_kwargs = {"plugin_name": plugin_name, "proxy": proxy_to_use}
             if supports_download_url and download_url:
                 update_kwargs["download_url"] = download_url
             elif custom_url and not supports_download_url:
@@ -1028,9 +1062,11 @@ class PluginUpdateManager(Star):
                 return
 
             await update_method(**update_kwargs)
+            proxy_status = "已启用代理加速" if use_proxy and self.proxy_address else "未使用代理"
             yield event.plain_result(
                 f"插件 {plugin_name} 重新安装成功（覆盖式）。\n"
                 f"来源：{source_label}\n"
+                f"代理：{proxy_status}\n"
                 f"提示：插件已覆盖安装，重载插件或重启 AstrBot 后生效。"
             ).use_t2i(False)
         except Exception as exc:

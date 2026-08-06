@@ -42,8 +42,53 @@
 | --- | --- | --- | --- |
 | `更新所有插件` | `updateallplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
 | `检查插件更新` | `checkpluginupdates` | 只检查可用更新，不执行更新 | 管理员 |
-| `重新安装插件 <插件名>` | `reinstallplugin` | 强制重新下载安装指定插件，不进行版本比较 | 管理员 |
+| `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
 | `重启astrbot` | 无 | 调用 Dashboard 接口重启 AstrBot | 管理员 |
+
+### 重新安装插件
+
+用于插件文件损坏、手动改动后需要还原，或需要临时切换到指定版本、指定分支的场景。该指令不比较版本号，直接覆盖安装。
+
+**基本用法**（自动查找）：
+
+```
+重新安装插件 astrbot_plugin_demo
+```
+
+不带地址时，按「自定义源绑定 → 插件市场」的顺序自动查找下载地址。
+
+**指定 GitHub 仓库或分支**：
+
+```
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev
+重新安装插件 astrbot_plugin_demo github.com/owner/repo/tree/test
+```
+
+- 只给仓库地址时，自动查询并使用默认分支（通常是 `main`）
+- 给 `/tree/分支名` 时，使用指定分支
+- 插件会自动转换为 `.zip` 归档下载地址
+
+**指定直接下载地址**：
+
+```
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/archive/v1.0.0.zip
+```
+
+**禁用代理加速**：
+
+```
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy
+```
+
+默认会使用配置的 `github_proxy` 加速，加 `--no-proxy` 可禁用（适合加速服务不稳定或访问内网地址时）。
+
+**说明**：
+
+- 支持 GitHub 仓库地址自动转换，不限于 `.zip` 结尾的直接下载地址
+- 未指定分支时自动使用仓库的默认分支（通过 GitHub API 查询）
+- 安装完成后需要重载插件或重启 AstrBot 才会生效
+- 旧版 AstrBot 不支持按固定地址安装时，该指令会明确提示
 
 ## 定时方式
 

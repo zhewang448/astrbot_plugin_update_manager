@@ -916,3 +916,123 @@ class PluginUpdateManager(Star):
         if notes:
             lines.append(f"\n{notes}")
         yield event.plain_result("\n".join(lines)).use_t2i(False)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("重新安装插件", alias={"reinstallplugin"})
+    async def reinstall_plugin_command(self, event: AstrMessageEvent):
+        """强制重新下载并安装指定插件，不进行版本比较。"""
+        parts = str(getattr(event, "message_str", "") or "").strip().split(maxsplit=2)
+        if len(parts) < 2 or not parts[1].strip():
+            yield event.plain_result(
+                "用法：重新安装插件 <插件名> [下载地址]\n"
+                "例如：重新安装插件 astrbot_plugin_demo\n"
+                "　　　重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/archive/main.zip\n"
+                "不进行版本比较，直接重新下载覆盖安装。\n"
+                "指定下载地址时会优先使用该地址，否则自动从自定义源或插件市场获取。"
+            )
+            return
+
+        target_name = parts[1].strip()
+        custom_url = parts[2].strip() if len(parts) > 2 else ""
+
+        # 验证自定义 URL 格式
+        if custom_url:
+            parsed = urlparse(custom_url)
+            if parsed.scheme not in ("http", "https"):
+                yield event.plain_result(
+                    f"下载地址格式错误：{custom_url}\n"
+                    "必须是 http:// 或 https:// 开头的完整 URL。"
+                )
+                return
+
+        logger.info(
+            f"收到用户命令 '重新安装插件 {target_name}'"
+            + (f"，指定下载地址：{custom_url}" if custom_url else "")
+        )
+
+        # 在已加载插件中查找，支持大小写不敏感匹配
+        local_plugin = None
+        for plugin in self.context.get_all_stars():
+            name = str(getattr(plugin, "name", "") or "").strip()
+            if name == target_name or normalize_name(name) == normalize_name(target_name):
+                local_plugin = {
+                    "name": name,
+                    "version": str(getattr(plugin, "version", "") or "").strip(),
+                    "author": str(getattr(plugin, "author", "") or "").strip(),
+                    "repo": str(getattr(plugin, "repo", "") or "").strip(),
+                    "root_dir_name": str(
+                        getattr(plugin, "root_dir_name", "") or ""
+                    ).strip(),
+                }
+                break
+
+        if not local_plugin:
+            yield event.plain_result(f"未找到已加载的插件：{target_name}")
+            return
+
+        plugin_name = local_plugin["name"]
+        yield event.plain_result(f"正在重新安装插件 {plugin_name}，请稍候...")
+
+        update_method = self.context._star_manager.update_plugin
+        try:
+            supports_download_url = "download_url" in inspect.signature(
+                update_method
+            ).parameters
+        except (TypeError, ValueError):
+            supports_download_url = False
+
+        download_url = ""
+        source_label = "仓库地址"
+
+        # 如果用户指定了下载地址，直接使用
+        if custom_url:
+            download_url = custom_url
+            source_label = f"用户指定地址（{custom_url[:50]}...）" if len(custom_url) > 50 else f"用户指定地址"
+        else:
+            # 否则自动获取下载地址
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                # 优先检查自定义绑定
+                bindings, _, _ = parse_custom_source_bindings(self.custom_plugin_sources)
+                if plugin_name in bindings:
+                    try:
+                        remote = await self._fetch_custom_source(session, bindings[plugin_name])
+                        download_url = remote.get("download_url", "")
+                        source_label = "自定义源"
+                    except Exception as exc:
+                        logger.warning(f"获取插件 {plugin_name} 自定义源失败：{exc}")
+                        yield event.plain_result(
+                            f"获取自定义源下载地址失败：{exc}\n将尝试使用仓库地址重新安装。"
+                        )
+
+                # 未找到自定义源或获取失败时，尝试插件市场
+                if not download_url:
+                    market_data = await self._fetch_online_plugins(session)
+                    if market_data:
+                        market_index = build_market_index(market_data)
+                        match = find_market_entry(local_plugin, market_index)
+                        if match.status == "matched" and match.entry:
+                            download_url = str(match.entry.get("download_url") or "").strip()
+                            source_label = "插件市场"
+
+        # 执行重新安装（覆盖式）
+        try:
+            update_kwargs = {"plugin_name": plugin_name, "proxy": self.proxy_address}
+            if supports_download_url and download_url:
+                update_kwargs["download_url"] = download_url
+            elif custom_url and not supports_download_url:
+                yield event.plain_result(
+                    f"当前 AstrBot 版本不支持指定下载地址。\n"
+                    f"请升级 AstrBot 或使用不带 URL 参数的重新安装命令。"
+                )
+                return
+
+            await update_method(**update_kwargs)
+            yield event.plain_result(
+                f"插件 {plugin_name} 重新安装成功（覆盖式）。\n"
+                f"来源：{source_label}\n"
+                f"提示：插件已覆盖安装，重载插件或重启 AstrBot 后生效。"
+            ).use_t2i(False)
+        except Exception as exc:
+            logger.error(f"重新安装插件 {plugin_name} 失败：{traceback.format_exc()}")
+            yield event.plain_result(f"重新安装插件 {plugin_name} 失败：{exc}")

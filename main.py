@@ -22,16 +22,23 @@ from astrbot.core.utils.version_comparator import VersionComparator
 
 from .dashboard_client import DashboardClient
 from .plugin_utils import (
+    BoundedCache,
+    apply_github_proxy,
     build_market_index,
     clean_version,
+    extract_changelog_range,
+    find_local_changelog,
     find_market_entry,
     is_valid_version,
+    normalize_github_url_to_archive,
     normalize_name,
     normalize_repo,
     normalize_weekdays,
     parse_check_times,
     parse_custom_source_bindings,
     parse_plugin_metadata,
+    parse_rate_limit_headers,
+    truncate_text,
 )
 
 
@@ -46,6 +53,8 @@ MARKET_URLS = (
     "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/raw/refs/heads/main/plugin_cache_original.json",
 )
 PLUGIN_NAME = "astrbot_plugin_update_manager"
+MAX_CHANGELOG_CHARS_PER_PLUGIN = 2000
+MAX_TOTAL_CHANGELOG_CHARS = 6000
 
 
 @dataclass
@@ -63,7 +72,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.4.1",
+    "2.5.0",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -87,7 +96,10 @@ class PluginUpdateManager(Star):
         self.custom_plugin_sources = list(
             self.config.get("custom_plugin_sources", []) or []
         )
-        self._http_cache: dict[str, dict[str, Any]] = {}
+        self.send_changelog_to_admin = self.config.get(
+            "send_changelog_to_admin", False
+        )
+        self._http_cache = BoundedCache(max_entries=128)
 
         self.dashboard: DashboardClient | None = None
         self.scheduler: AsyncIOScheduler | None = None
@@ -333,6 +345,7 @@ class PluginUpdateManager(Star):
                     supports_download_url = False
 
                 succeeded_plugins: list[str] = []
+                succeeded_update_info: list[dict[str, Any]] = []
                 failed_plugins: list[str] = []
                 error_messages: list[str] = []
 
@@ -371,6 +384,7 @@ class PluginUpdateManager(Star):
                             f"{plugin.get('online_version') or '?'}, {source_label})"
                         )
                         succeeded_plugins.append(version_change)
+                        succeeded_update_info.append(plugin)
                         logger.info(f"插件更新成功：{version_change}")
                     except Exception as exc:
                         failed_plugins.append(plugin_name)
@@ -394,6 +408,17 @@ class PluginUpdateManager(Star):
                 need_to_restart = bool(succeeded_plugins and self.restart_mode)
                 if need_to_restart:
                     lines.append("即将重启 AstrBot...")
+
+                if (
+                    self.send_changelog_to_admin
+                    and succeeded_update_info
+                    and self.admin_sid_list
+                ):
+                    asyncio.create_task(
+                        self._build_and_send_changelogs(succeeded_update_info),
+                        name=f"{PLUGIN_NAME}:send-changelogs",
+                    )
+
                 return "\n\n".join(lines), need_to_restart
             except Exception as exc:
                 logger.error(f"插件更新流程异常：{traceback.format_exc()}")
@@ -447,10 +472,13 @@ class PluginUpdateManager(Star):
         self, session: aiohttp.ClientSession
     ) -> object | None:
         for url in MARKET_URLS:
+            proxied_url = apply_github_proxy(url, self.proxy_address)
             try:
-                async with session.get(url) as response:
+                async with session.get(proxied_url) as response:
                     if response.status != 200:
-                        logger.warning(f"请求插件市场 {url} 失败，状态码：{response.status}")
+                        logger.warning(
+                            f"请求插件市场 {url} 失败，状态码：{response.status}"
+                        )
                         continue
                     remote_data = await response.json(content_type=None)
                     if isinstance(remote_data, (dict, list)) and remote_data:
@@ -484,13 +512,15 @@ class PluginUpdateManager(Star):
             if response.status == 304 and cached:
                 return str(cached["value"])
             if response.status != 200:
-                message = (await response.text())[:200].strip()
-                raise RuntimeError(f"GitHub 请求失败（{response.status}）：{message}")
+                rate_limit_hint = parse_rate_limit_headers(response.headers)
+                body = (await response.text())[:200].strip()
+                detail = rate_limit_hint if rate_limit_hint else body
+                raise RuntimeError(f"GitHub 请求失败（{response.status}）：{detail}")
             value = await response.text()
-            self._http_cache[url] = {
+            self._http_cache.set(url, {
                 "etag": response.headers.get("ETag", ""),
                 "value": value,
-            }
+            })
             return value
 
     async def _fetch_json_cached(
@@ -529,9 +559,10 @@ class PluginUpdateManager(Star):
         metadata = None
         metadata_error = None
         for filename in ("metadata.yaml", "metadata.yml"):
-            raw_url = (
+            raw_url = apply_github_proxy(
                 f"https://raw.githubusercontent.com/{binding.owner}/"
-                f"{binding.repo}/{commit_sha}/{filename}"
+                f"{binding.repo}/{commit_sha}/{filename}",
+                self.proxy_address,
             )
             try:
                 metadata_text = await self._fetch_text_cached(session, raw_url)
@@ -544,15 +575,17 @@ class PluginUpdateManager(Star):
                 f"无法读取 metadata.yaml 或 metadata.yml：{metadata_error}"
             )
 
+        download_url = apply_github_proxy(
+            f"https://github.com/{binding.owner}/{binding.repo}/archive/"
+            f"{commit_sha}.zip",
+            self.proxy_address,
+        )
         return {
             **metadata,
             "ref": target_ref,
             "commit_sha": commit_sha,
             "repo_url": binding.repo_url,
-            "download_url": (
-                f"https://github.com/{binding.owner}/{binding.repo}/archive/"
-                f"{commit_sha}.zip"
-            ),
+            "download_url": download_url,
         }
 
     @filter.permission_type(filter.PermissionType.ADMIN)
@@ -608,14 +641,18 @@ class PluginUpdateManager(Star):
             )
 
     async def get_need_update_plugins_list(self) -> UpdateCheckResult:
+        # 黑白名单转为归一化集合，避免大小写或连字符差异导致静默失效。
+        black_set = {normalize_name(n) for n in self.black_plugin_list if n}
+        white_set = {normalize_name(n) for n in self.white_plugin_list if n}
+
         local_plugins: list[dict[str, Any]] = []
         for plugin in self.context.get_all_stars():
             name = str(getattr(plugin, "name", "") or "").strip()
             if not name or getattr(plugin, "reserved", False):
                 continue
-            if name in self.black_plugin_list:
+            if normalize_name(name) in black_set:
                 continue
-            if self.white_plugin_list and name not in self.white_plugin_list:
+            if white_set and normalize_name(name) not in white_set:
                 continue
             local_plugins.append(
                 {
@@ -651,39 +688,48 @@ class PluginUpdateManager(Star):
         market_data: object | None = None
         timeout = aiohttp.ClientTimeout(total=30)
         async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
-            for plugin_name, binding in bindings.items():
-                plugin = local_by_name.get(plugin_name)
-                if not plugin:
-                    continue
-                try:
-                    remote = await self._fetch_custom_source(session, binding)
-                    if normalize_name(remote["name"]) != normalize_name(plugin_name):
-                        raise RuntimeError(
-                            f"远端插件名 {remote['name']} 与本地插件名不一致"
-                        )
-                    remote_repo = normalize_repo(remote.get("repo"))
-                    if remote_repo and remote_repo != binding.repo_id.lower():
-                        raise RuntimeError(
-                            f"metadata 中的仓库 {remote['repo']} 与绑定仓库不一致"
-                        )
-                    self._append_version_update(
-                        result,
-                        plugin,
-                        remote["version"],
-                        download_url=remote["download_url"],
-                        source_type="custom",
-                        source_repo=remote["repo_url"],
-                        source_ref=remote["ref"],
-                        commit_sha=remote["commit_sha"],
-                        matched_by="custom_binding",
-                    )
-                except Exception as exc:
-                    result.custom_source_errors.append(
-                        {"plugin": plugin_name, "error": str(exc)}
-                    )
-                    logger.warning(
-                        f"插件 {plugin_name} 的自定义更新源检查失败，已跳过：{exc}"
-                    )
+            # 并发检查所有自定义源，最多同时发起 5 个请求。
+            if bindings:
+                semaphore = asyncio.Semaphore(5)
+
+                async def _fetch_one(plugin_name: str, binding) -> None:
+                    plugin = local_by_name.get(plugin_name)
+                    if not plugin:
+                        return
+                    async with semaphore:
+                        try:
+                            remote = await self._fetch_custom_source(session, binding)
+                            if normalize_name(remote["name"]) != normalize_name(plugin_name):
+                                raise RuntimeError(
+                                    f"远端插件名 {remote['name']} 与本地插件名不一致"
+                                )
+                            remote_repo = normalize_repo(remote.get("repo"))
+                            if remote_repo and remote_repo != binding.repo_id.lower():
+                                raise RuntimeError(
+                                    f"metadata 中的仓库 {remote['repo']} 与绑定仓库不一致"
+                                )
+                            self._append_version_update(
+                                result,
+                                plugin,
+                                remote["version"],
+                                download_url=remote["download_url"],
+                                source_type="custom",
+                                source_repo=remote["repo_url"],
+                                source_ref=remote["ref"],
+                                commit_sha=remote["commit_sha"],
+                                matched_by="custom_binding",
+                            )
+                        except Exception as exc:
+                            result.custom_source_errors.append(
+                                {"plugin": plugin_name, "error": str(exc)}
+                            )
+                            logger.warning(
+                                f"插件 {plugin_name} 的自定义更新源检查失败，已跳过：{exc}"
+                            )
+
+                await asyncio.gather(
+                    *[_fetch_one(n, b) for n, b in bindings.items()]
+                )
 
             if market_plugins:
                 market_data = await self._fetch_online_plugins(session)
@@ -753,3 +799,275 @@ class PluginUpdateManager(Star):
             logger.info(f"调试模式：已生成 {debug_path.name}。")
         except Exception as exc:
             logger.error(f"写入调试文件失败：{exc}")
+
+    async def _build_and_send_changelogs(
+        self, succeeded_updates: list[dict[str, Any]]
+    ) -> None:
+        """更新成功后读取各插件本地 CHANGELOG，以合并转发形式发送给管理员。
+
+        在后台任务中运行，不阻塞更新结果的返回。任何单个插件的失败都只
+        记录警告，不影响其他插件的日志发送。
+        """
+        plugin_dir_base = Path(__file__).resolve().parent.parent
+        node_texts: list[str] = []
+
+        for info in succeeded_updates:
+            plugin_name = info.get("name", "")
+            root_dir = info.get("root_dir_name", "").strip()
+            old_version = info.get("version", "")
+            new_version = info.get("online_version", "")
+
+            if not root_dir:
+                continue
+
+            changelog_path = find_local_changelog(plugin_dir_base / root_dir)
+            if not changelog_path:
+                continue
+
+            try:
+                raw_text = await asyncio.to_thread(
+                    changelog_path.read_text, encoding="utf-8", errors="replace"
+                )
+                changelog_text = extract_changelog_range(raw_text, old_version, new_version)
+                changelog_text = truncate_text(
+                    changelog_text, MAX_CHANGELOG_CHARS_PER_PLUGIN
+                )
+            except Exception as exc:
+                logger.warning(f"读取插件 {plugin_name} 的 CHANGELOG 失败：{exc}")
+                continue
+
+            if not changelog_text:
+                continue
+
+            header = f"{plugin_name}  {old_version} → {new_version}"
+            node_texts.append(f"{header}\n\n{changelog_text}")
+
+        if not node_texts:
+            return
+
+        await self._try_send_changelog_forward(node_texts)
+
+    async def _try_send_changelog_forward(self, node_texts: list[str]) -> None:
+        """尝试以合并转发发送更新日志；平台不支持时降级为长文本。"""
+        NodeCls = getattr(Comp, "Node", None)
+        NodesCls = getattr(Comp, "Nodes", None)
+
+        if NodeCls and NodesCls:
+            try:
+                nodes = [
+                    NodeCls(
+                        uin="0",
+                        name="插件更新管理器",
+                        content=[Comp.Plain(text=text)],
+                    )
+                    for text in node_texts
+                ]
+                await self.send_message_to_admin([NodesCls(nodes=nodes)])
+                return
+            except Exception as exc:
+                logger.warning(f"发送合并转发失败，降级为长文本：{exc}")
+
+        # 降级：拼接成一条长文本，超出限制时截断。
+        separator = "\n\n" + "─" * 20 + "\n\n"
+        combined = separator.join(node_texts)
+        combined = truncate_text(combined, MAX_TOTAL_CHANGELOG_CHARS)
+        await self.send_message_to_admin(
+            [Comp.Plain(text=f"本次更新日志：\n\n{combined}")]
+        )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("检查插件更新", alias={"checkpluginupdates"})
+    async def check_plugins_command(self, event: AstrMessageEvent):
+        """只检查有无可用更新，不执行更新操作。"""
+        logger.info("收到用户命令 '检查插件更新'。")
+        if self._update_lock.locked():
+            yield event.plain_result("已有一次插件更新检查正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result("正在检查插件更新，请稍候...")
+        async with self._update_lock:
+            try:
+                check_result = await self.get_need_update_plugins_list()
+            except Exception as exc:
+                yield event.plain_result(f"检查失败：{exc}")
+                return
+
+        if check_result.status == "fetch_failed":
+            yield event.plain_result("插件市场请求失败，请检查网络或代理设置后重试。")
+            return
+
+        notes = self._format_check_notes(check_result)
+        if not check_result.updates:
+            message = "目前没有发现需要更新的插件。"
+            if notes:
+                message += f"\n\n{notes}"
+            yield event.plain_result(message)
+            return
+
+        lines = [f"发现 {len(check_result.updates)} 个可更新插件："]
+        for plugin in check_result.updates:
+            source_label = (
+                "自定义源" if plugin.get("source_type") == "custom" else "插件市场"
+            )
+            lines.append(
+                f"• {plugin['name']}  "
+                f"{plugin.get('version') or '?'} → {plugin.get('online_version') or '?'}"
+                f"  [{source_label}]"
+            )
+        if notes:
+            lines.append(f"\n{notes}")
+        yield event.plain_result("\n".join(lines)).use_t2i(False)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("重新安装插件", alias={"reinstallplugin"})
+    async def reinstall_plugin_command(self, event: AstrMessageEvent):
+        """强制重新下载并安装指定插件，不进行版本比较。"""
+        parts = str(getattr(event, "message_str", "") or "").strip().split(maxsplit=3)
+        if len(parts) < 2 or not parts[1].strip():
+            yield event.plain_result(
+                "用法：重新安装插件 <插件名> [GitHub地址或下载URL] [--no-proxy]\n"
+                "例如：\n"
+                "  重新安装插件 astrbot_plugin_demo\n"
+                "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo\n"
+                "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev\n"
+                "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy\n"
+                "\n"
+                "不进行版本比较，直接重新下载覆盖安装。\n"
+                "第二个参数可以是：GitHub 仓库地址（自动转为下载链接）、直接下载地址（.zip）。\n"
+                "添加 --no-proxy 禁用 github_proxy 加速（默认启用）。"
+            )
+            return
+
+        target_name = parts[1].strip()
+        custom_url = parts[2].strip() if len(parts) > 2 and not parts[2].startswith("--") else ""
+        use_proxy = not any(p == "--no-proxy" for p in parts[2:])
+
+        logger.info(
+            f"收到用户命令 '重新安装插件 {target_name}'"
+            + (f"，指定地址：{custom_url}" if custom_url else "")
+            + f"，代理：{'启用' if use_proxy else '禁用'}"
+        )
+
+        # 在已加载插件中查找，支持大小写不敏感匹配
+        local_plugin = None
+        for plugin in self.context.get_all_stars():
+            name = str(getattr(plugin, "name", "") or "").strip()
+            if name == target_name or normalize_name(name) == normalize_name(target_name):
+                local_plugin = {
+                    "name": name,
+                    "version": str(getattr(plugin, "version", "") or "").strip(),
+                    "author": str(getattr(plugin, "author", "") or "").strip(),
+                    "repo": str(getattr(plugin, "repo", "") or "").strip(),
+                    "root_dir_name": str(
+                        getattr(plugin, "root_dir_name", "") or ""
+                    ).strip(),
+                }
+                break
+
+        if not local_plugin:
+            yield event.plain_result(f"未找到已加载的插件：{target_name}")
+            return
+
+        plugin_name = local_plugin["name"]
+        yield event.plain_result(f"正在重新安装插件 {plugin_name}，请稍候...")
+
+        update_method = self.context._star_manager.update_plugin
+        try:
+            supports_download_url = "download_url" in inspect.signature(
+                update_method
+            ).parameters
+        except (TypeError, ValueError):
+            supports_download_url = False
+
+        download_url = ""
+        source_label = "仓库地址"
+        normalized_result = None
+
+        # 如果用户指定了下载地址，先尝试标准化
+        if custom_url:
+            # 尝试解析为 GitHub 仓库 URL
+            normalized_result = normalize_github_url_to_archive(custom_url)
+            if normalized_result:
+                owner, repo, archive_url = normalized_result
+                # 检查是否需要获取默认分支（用户只给了 owner/repo）
+                if "/tree/" not in custom_url and not custom_url.endswith(".zip"):
+                    # 用户给的是裸仓库地址，需要查默认分支
+                    try:
+                        timeout = aiohttp.ClientTimeout(total=15)
+                        async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                            repo_api = f"https://api.github.com/repos/{owner}/{repo}"
+                            repo_info = await self._fetch_json_cached(session, repo_api)
+                            default_branch = str(repo_info.get("default_branch") or "main").strip()
+                            # 重新生成带默认分支的归档地址
+                            archive_url = f"https://github.com/{owner}/{repo}/archive/{quote(default_branch, safe='')}.zip"
+                            source_label = f"GitHub {owner}/{repo}@{default_branch}"
+                    except Exception as exc:
+                        logger.warning(f"获取默认分支失败，使用 main：{exc}")
+                        archive_url = f"https://github.com/{owner}/{repo}/archive/main.zip"
+                        source_label = f"GitHub {owner}/{repo}@main（兜底）"
+                else:
+                    # 用户明确指定了分支或已是 .zip
+                    source_label = f"用户指定（{custom_url[:60]}...）" if len(custom_url) > 60 else "用户指定"
+
+                download_url = archive_url
+            else:
+                # 不是 GitHub 地址，当作直接下载 URL
+                parsed = urlparse(custom_url)
+                if parsed.scheme not in ("http", "https"):
+                    yield event.plain_result(
+                        f"下载地址格式错误：{custom_url}\n"
+                        "必须是 http:// 或 https:// 开头的完整 URL，或 GitHub 仓库地址。"
+                    )
+                    return
+                download_url = custom_url
+                source_label = f"直接下载（{custom_url[:50]}...）" if len(custom_url) > 50 else "直接下载"
+        else:
+            # 否则自动获取下载地址
+            timeout = aiohttp.ClientTimeout(total=30)
+            async with aiohttp.ClientSession(timeout=timeout, trust_env=True) as session:
+                # 优先检查自定义绑定
+                bindings, _, _ = parse_custom_source_bindings(self.custom_plugin_sources)
+                if plugin_name in bindings:
+                    try:
+                        remote = await self._fetch_custom_source(session, bindings[plugin_name])
+                        download_url = remote.get("download_url", "")
+                        source_label = "自定义源"
+                    except Exception as exc:
+                        logger.warning(f"获取插件 {plugin_name} 自定义源失败：{exc}")
+                        yield event.plain_result(
+                            f"获取自定义源下载地址失败：{exc}\n将尝试使用仓库地址重新安装。"
+                        )
+
+                # 未找到自定义源或获取失败时，尝试插件市场
+                if not download_url:
+                    market_data = await self._fetch_online_plugins(session)
+                    if market_data:
+                        market_index = build_market_index(market_data)
+                        match = find_market_entry(local_plugin, market_index)
+                        if match.status == "matched" and match.entry:
+                            download_url = str(match.entry.get("download_url") or "").strip()
+                            source_label = "插件市场"
+
+        # 执行重新安装（覆盖式）
+        try:
+            proxy_to_use = self.proxy_address if use_proxy else ""
+            update_kwargs = {"plugin_name": plugin_name, "proxy": proxy_to_use}
+            if supports_download_url and download_url:
+                update_kwargs["download_url"] = download_url
+            elif custom_url and not supports_download_url:
+                yield event.plain_result(
+                    f"当前 AstrBot 版本不支持指定下载地址。\n"
+                    f"请升级 AstrBot 或使用不带 URL 参数的重新安装命令。"
+                )
+                return
+
+            await update_method(**update_kwargs)
+            proxy_status = "已启用代理加速" if use_proxy and self.proxy_address else "未使用代理"
+            yield event.plain_result(
+                f"插件 {plugin_name} 重新安装成功（覆盖式）。\n"
+                f"来源：{source_label}\n"
+                f"代理：{proxy_status}"
+            ).use_t2i(False)
+        except Exception as exc:
+            logger.error(f"重新安装插件 {plugin_name} 失败：{traceback.format_exc()}")
+            yield event.plain_result(f"重新安装插件 {plugin_name} 失败：{exc}")

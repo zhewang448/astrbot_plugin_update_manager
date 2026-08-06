@@ -151,6 +151,12 @@
     "type": "bool",
     "default": false
   },
+  "send_changelog_to_admin": {
+    "description": "更新成功后发送更新日志",
+    "type": "bool",
+    "hint": "更新成功后读取各插件本地 CHANGELOG.md，截取新旧版本区间的内容，以合并转发消息发送给 admin_sid_list 中的管理员；仅发送有 CHANGELOG 的插件",
+    "default": false
+  },
   "test_mode": {
     "description": "测试模式",
     "type": "bool",

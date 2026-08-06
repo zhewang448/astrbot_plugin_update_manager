@@ -3,15 +3,44 @@
 from __future__ import annotations
 
 import re
+from collections import OrderedDict
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import unquote, urlparse, quote
 
 import yaml
 
 
 PLUGIN_PREFIX = "astrbot_plugin_"
 WEEKDAY_ORDER = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+#: 可以安全套用 GitHub 加速前缀的主机。
+#: 刻意不包含 api.github.com：多数加速服务不代理 API 域名，而且 API 请求
+#: 会携带 Authorization 头，不应经过第三方中转。
+PROXYABLE_GITHUB_HOSTS = frozenset(
+    {
+        "github.com",
+        "raw.githubusercontent.com",
+        "codeload.github.com",
+        "objects.githubusercontent.com",
+    }
+)
+
+CHANGELOG_FILENAMES = (
+    "CHANGELOG.md",
+    "changelog.md",
+    "Changelog.md",
+    "CHANGELOG.MD",
+    "CHANGELOG",
+    "changelog",
+    "docs/CHANGELOG.md",
+    "docs/changelog.md",
+)
+
+_HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*$")
+_VERSION_TOKEN_RE = re.compile(r"v?(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)", re.IGNORECASE)
 
 
 @dataclass
@@ -43,6 +72,60 @@ class CustomSourceBinding:
     @property
     def repo_id(self) -> str:
         return f"{self.owner}/{self.repo}"
+
+
+def apply_github_proxy(url: str, proxy: str) -> str:
+    """为可加速的 GitHub 地址套上 URL 前缀式加速服务。
+
+    只处理 :data:`PROXYABLE_GITHUB_HOSTS` 中的主机；其他地址（含
+    api.github.com）原样返回。已经带有加速前缀的地址不会被重复包装。
+    """
+    target = str(url or "").strip()
+    prefix = str(proxy or "").strip().rstrip("/")
+    if not target or not prefix:
+        return target
+
+    parsed = urlparse(target)
+    if parsed.scheme not in ("http", "https"):
+        return target
+    if parsed.netloc.lower().removeprefix("www.") not in PROXYABLE_GITHUB_HOSTS:
+        return target
+
+    # 加速地址本身指向 GitHub 时不做处理，避免出现自我嵌套。
+    proxy_parsed = urlparse(prefix if "://" in prefix else f"https://{prefix}")
+    if proxy_parsed.netloc.lower().removeprefix("www.") in PROXYABLE_GITHUB_HOSTS:
+        return target
+    if not proxy_parsed.scheme:
+        prefix = f"https://{prefix}"
+
+    return f"{prefix}/{target}"
+
+
+class BoundedCache:
+    """带容量上限的 LRU 缓存，用于存放 ETag 和响应体。
+
+    自定义源会把 commit SHA 拼进 URL，上游每发一版就多出一个永不复用的
+    键，因此必须限制条目数量，否则长期运行会一直增长。
+    """
+
+    def __init__(self, max_entries: int = 128):
+        self.max_entries = max(1, int(max_entries))
+        self._store: OrderedDict[str, dict[str, Any]] = OrderedDict()
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        if key not in self._store:
+            return None
+        self._store.move_to_end(key)
+        return self._store[key]
+
+    def set(self, key: str, value: dict[str, Any]) -> None:
+        self._store[key] = value
+        self._store.move_to_end(key)
+        while len(self._store) > self.max_entries:
+            self._store.popitem(last=False)
+
+    def __len__(self) -> int:
+        return len(self._store)
 
 
 def normalize_name(value: object) -> str:
@@ -334,6 +417,193 @@ def find_market_entry(local_plugin: dict[str, Any], index: MarketIndex) -> Marke
     if result:
         return result
     return MarketMatch(status="not_found")
+
+
+def version_sort_key(value: object) -> tuple[int, ...]:
+    """把版本号转成可比较的数字元组，用于截取区间。"""
+    cleaned = clean_version(value)
+    core = re.split(r"[-+]", cleaned, maxsplit=1)[0]
+    parts: list[int] = []
+    for chunk in core.split("."):
+        try:
+            parts.append(int(chunk))
+        except ValueError:
+            break
+    return tuple(parts)
+
+
+def extract_changelog_range(
+    text: object,
+    from_version: object,
+    to_version: object,
+) -> str:
+    """截取 (from_version, to_version] 区间内的 CHANGELOG 小节。
+
+    不依赖标题层级或文件结构：扫描所有包含版本号的标题，按版本号大小
+    判断是否落在区间内。这样即使文件里小节顺序错乱、或正文标题混在
+    版本标题之间，也能得到正确结果。
+    """
+    content = str(text or "")
+    if not content.strip():
+        return ""
+
+    lines = content.splitlines()
+    sections: list[tuple[tuple[int, ...], int, int]] = []
+    current: tuple[tuple[int, ...], int] | None = None
+
+    for line_no, line in enumerate(lines):
+        heading = _HEADING_RE.match(line)
+        if not heading:
+            continue
+        token = _VERSION_TOKEN_RE.search(heading.group(2))
+        if not token:
+            continue
+        version_key = version_sort_key(token.group(1))
+        if not version_key:
+            continue
+        if current is not None:
+            sections.append((current[0], current[1], line_no))
+        current = (version_key, line_no)
+
+    if current is not None:
+        sections.append((current[0], current[1], len(lines)))
+    if not sections:
+        return ""
+
+    low = version_sort_key(from_version)
+    high = version_sort_key(to_version)
+
+    selected = [
+        (key, start, end)
+        for key, start, end in sections
+        if (not high or key <= high) and (not low or key > low)
+    ]
+    # 版本号无法解析时至少给出最新一节，避免整段留空。
+    if not selected and high:
+        selected = [max(sections, key=lambda item: item[0])]
+
+    selected.sort(key=lambda item: item[0], reverse=True)
+    blocks: list[str] = []
+    for _, start, end in selected:
+        block = "\n".join(lines[start:end]).strip()
+        if block:
+            blocks.append(block)
+    return "\n\n".join(blocks).strip()
+
+
+def parse_rate_limit_headers(headers: object) -> str:
+    """从 GitHub 响应头识别限流，返回可读提示，未限流则返回空串。"""
+    getter: Callable[[str], Any] | None = getattr(headers, "get", None)
+    if not callable(getter):
+        return ""
+
+    remaining = str(getter("X-RateLimit-Remaining") or "").strip()
+    if remaining != "0":
+        return ""
+
+    limit = str(getter("X-RateLimit-Limit") or "").strip()
+    reset_raw = str(getter("X-RateLimit-Reset") or "").strip()
+    reset_text = ""
+    if reset_raw.isdigit():
+        from datetime import datetime, timezone
+
+        reset_at = datetime.fromtimestamp(int(reset_raw), tz=timezone.utc).astimezone()
+        reset_text = f"，将于 {reset_at.strftime('%H:%M')} 恢复"
+
+    quota = f"（每小时 {limit} 次）" if limit else ""
+    return (
+        f"GitHub API 限额已用尽{quota}{reset_text}。"
+        "建议在配置页填写 github_token 以提高限额。"
+    )
+
+
+def truncate_text(value: object, max_chars: int, suffix: str = "……（已截断）") -> str:
+    """限制单段文本长度，避免超出平台消息上限。"""
+    text = str(value or "")
+    if max_chars <= 0 or len(text) <= max_chars:
+        return text
+    keep = max(0, max_chars - len(suffix))
+    return text[:keep].rstrip() + suffix
+
+
+def find_local_changelog(plugin_dir: object) -> Path | None:
+    """在插件目录内按常见文件名查找 CHANGELOG。"""
+    if not plugin_dir:
+        return None
+    try:
+        base = Path(str(plugin_dir)).resolve()
+    except (OSError, ValueError):
+        return None
+    if not base.is_dir():
+        return None
+
+    for filename in CHANGELOG_FILENAMES:
+        candidate = base / filename
+        try:
+            resolved = candidate.resolve()
+            # 防止 CHANGELOG 是指向目录外的符号链接。
+            resolved.relative_to(base)
+        except (OSError, ValueError):
+            continue
+        if resolved.is_file():
+            return resolved
+    return None
+
+
+def normalize_github_url_to_archive(
+    url: str, default_branch: str = "main"
+) -> tuple[str, str, str] | None:
+    """将 GitHub 仓库 URL（含分支/tag/commit）转换为下载地址和元信息。
+
+    支持的输入格式：
+        - https://github.com/owner/repo
+        - https://github.com/owner/repo/tree/branch-name
+        - https://github.com/owner/repo/archive/refs/tags/v1.0.0.zip（已是归档地址，原样返回）
+        - github.com/owner/repo（自动补 https://）
+
+    返回 (owner, repo, archive_url) 或 None（无法解析时）。
+    archive_url 是可下载的 .zip 地址。
+
+    当输入不带分支/tag 时，使用 default_branch（默认 "main"）。
+    调用方可先用 GitHub API 查默认分支，传给这个函数。
+    """
+    raw = str(url or "").strip()
+    if not raw:
+        return None
+
+    # 补全 scheme
+    if "://" not in raw:
+        raw = f"https://{raw}"
+
+    parsed = urlparse(raw)
+    host = parsed.netloc.lower().removeprefix("www.")
+    if host != "github.com":
+        return None
+
+    parts = [p for p in parsed.path.strip("/").split("/") if p]
+    if len(parts) < 2:
+        return None
+
+    owner, repo = parts[0], parts[1]
+    # 去掉 .git 后缀
+    repo = re.sub(r"\.git$", "", repo, flags=re.IGNORECASE)
+
+    # 已经是 archive 地址？直接返回
+    if len(parts) >= 3 and parts[2] == "archive":
+        return (owner, repo, raw)
+
+    # 提取分支/tag/commit
+    ref = default_branch
+    if len(parts) >= 4:
+        segment_type = parts[2]  # tree / blob / commit / releases / ...
+        if segment_type in ("tree", "blob", "commit"):
+            ref = "/".join(parts[3:])  # 支持分支名里有斜杠
+        elif segment_type == "releases" and len(parts) >= 5 and parts[3] == "tag":
+            ref = f"refs/tags/{parts[4]}"
+
+    # 构造归档下载地址
+    archive_url = f"https://github.com/{owner}/{repo}/archive/{quote(ref, safe='')}.zip"
+    return (owner, repo, archive_url)
 
 
 def parse_check_times(values: object) -> tuple[list[str], list[str]]:

@@ -1,7 +1,7 @@
 name: astrbot_plugin_update_manager
 display_name: 插件更新管理器
 desc: "批量检查并更新已安装的 AstrBot 插件，支持插件市场与自定义 GitHub 更新源、灵活定时、黑白名单、管理员通知和更新后自动重启。"
-help: "管理员发送 更新所有插件 执行检查和更新；发送 重启astrbot 可手动重启 AstrBot。"
-version: v2.4.1
+help: "管理员发送 更新所有插件 执行检查和更新；发送 检查插件更新 只查看可用更新；发送 重新安装插件 <插件名> [GitHub地址] [--no-proxy] 强制重装；发送 重启astrbot 可手动重启 AstrBot。"
+version: v2.5.0
 author: bushikq
 repo: https://github.com/zhewang448/astrbot_plugin_update_manager

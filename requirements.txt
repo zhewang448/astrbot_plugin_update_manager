@@ -1,2 +1,2 @@
-APScheduler
-PyYAML
+APScheduler>=3.10,<4
+PyYAML>=6.0

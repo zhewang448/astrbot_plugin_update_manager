@@ -1,4 +1,4 @@
-# AstrBot 插件更新管理器 v2.4.0
+# AstrBot 插件更新管理器 v2.5.0
 
 用于批量检查并更新已安装的 AstrBot 插件，支持手动更新、灵活定时检查、管理员通知和更新后自动重启。
 
@@ -19,13 +19,15 @@
 ## 主要功能
 
 - **批量检查和更新**：通过管理员命令检查并更新符合条件的已安装插件。
+- **只检查不更新**：`检查插件更新` 指令仅列出可用更新，不执行更新操作。
 - **两种定时方式**：支持固定间隔，以及指定星期和每日时间两种调度方式。
 - **黑白名单管理**：配置页可从已安装插件中搜索并多选，控制需要更新或跳过的插件。
 - **可靠的市场匹配**：优先按照仓库地址匹配，再使用作者与名称、唯一名称进行兜底判断。
 - **歧义保护**：存在多个同名候选时不会任意选择，避免更新到错误插件。
 - **更新结果通知**：可向指定管理员会话发送检查和更新摘要。
+- **更新日志通知**：更新成功后自动读取各插件本地 CHANGELOG，以合并转发消息发送给管理员。
 - **更新后自动重启**：支持在更新成功后通过 AstrBot 本地 Dashboard 接口重启核心。
-- **GitHub 代理支持**：可配置 GitHub 加速地址，并兼容市场提供的安装包下载地址。
+- **GitHub 代理支持**：`github_proxy` 加速地址同时作用于自定义源的 raw 文件请求和 zip 下载地址。
 - **自定义 GitHub 更新源**：可为未上架插件市场的本地插件绑定仓库，通过远端 `metadata.yaml` 检查版本。
 
 ## 安装
@@ -33,6 +35,59 @@
 将插件放入 AstrBot 的 `data/plugins` 目录，或从 AstrBot 插件市场安装。
 
 依赖 APScheduler；AstrBot 安装插件时会根据 `requirements.txt` 自动处理。
+
+## 指令
+
+| 指令 | 别名 | 功能 | 权限 |
+| --- | --- | --- | --- |
+| `更新所有插件` | `updateallplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
+| `检查插件更新` | `checkpluginupdates` | 只检查可用更新，不执行更新 | 管理员 |
+| `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
+| `重启astrbot` | 无 | 调用 Dashboard 接口重启 AstrBot | 管理员 |
+
+### 重新安装插件
+
+用于插件文件损坏、手动改动后需要还原，或需要临时切换到指定版本、指定分支的场景。该指令不比较版本号，直接覆盖安装。
+
+**基本用法**（自动查找）：
+
+```
+重新安装插件 astrbot_plugin_demo
+```
+
+不带地址时，按「自定义源绑定 → 插件市场」的顺序自动查找下载地址。
+
+**指定 GitHub 仓库或分支**：
+
+```
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev
+重新安装插件 astrbot_plugin_demo github.com/owner/repo/tree/test
+```
+
+- 只给仓库地址时，自动查询并使用默认分支（通常是 `main`）
+- 给 `/tree/分支名` 时，使用指定分支
+- 插件会自动转换为 `.zip` 归档下载地址
+
+**指定直接下载地址**：
+
+```
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/archive/v1.0.0.zip
+```
+
+**禁用代理加速**：
+
+```
+重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy
+```
+
+默认会使用配置的 `github_proxy` 加速，加 `--no-proxy` 可禁用（适合加速服务不稳定或访问内网地址时）。
+
+**说明**：
+
+- 支持 GitHub 仓库地址自动转换，不限于 `.zip` 结尾的直接下载地址
+- 未指定分支时自动使用仓库的默认分支（通过 GitHub API 查询）
+- 旧版 AstrBot 不支持按固定地址安装时，该指令会明确提示
 
 ## 定时方式
 
@@ -65,12 +120,13 @@
 | `check_times` | 方式 2 的每日执行时间列表，格式为 `HH:MM` |
 | `check_on_startup` | 方式 2 下启动后是否立即检查一次 |
 | `admin_sid_list` | 定时检查结束后接收结果的管理员会话 SID |
-| `github_proxy` | GitHub 加速地址，不填则不使用 |
+| `github_proxy` | GitHub 加速地址，同时作用于 raw 文件请求和 zip 下载；不填则不使用 |
 | `github_token` | 可选 GitHub API Token，用于提高 GitHub API 限额 |
 | `custom_plugin_sources` | 为已安装插件绑定 GitHub 仓库，可搜索选择本地插件 |
 | `white_plugin_list` | 非空时只检查所选插件，支持搜索和多选 |
 | `black_plugin_list` | 跳过所选插件，支持搜索和多选 |
 | `restart_mode` | 有插件更新成功后是否自动重启 AstrBot |
+| `send_changelog_to_admin` | 更新成功后读取各插件本地 CHANGELOG，以合并转发发送给管理员 |
 | `test_mode` | 在插件目录生成 `test.md` 调试数据 |
 
 黑名单优先于白名单。测试分支或不希望自动更新的插件，应主动加入黑名单。
@@ -107,13 +163,6 @@ Token 仅用于 GitHub API 请求认证，不会显示在运行日志中。请�
 4. 出现多个同名候选时标记为歧义并跳过，不会任意选取第一个。
 
 仓库地址匹配会处理大小写、`.git`、末尾斜杠、GitHub `tree/分支` 地址及常见 GitHub 代理 URL。
-
-## 指令
-
-| 指令 | 别名 | 功能 | 权限 |
-| --- | --- | --- | --- |
-| `更新所有插件` | `updateallplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
-| `重启astrbot` | 无 | 调用 Dashboard 接口重启 AstrBot | 管理员 |
 
 ## 更新日志
 

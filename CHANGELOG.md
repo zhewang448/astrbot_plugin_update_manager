@@ -6,6 +6,7 @@
 - 新增管理员指令 `清除插件数据 <插件名> --confirm`，只清理 AstrBot 管理的非配置持久化数据并重载目标插件。
 - `重新安装插件` 支持仅提供紧贴命令的仓库链接，从远端 `metadata.name` 自动定位本地插件。
 - 修复自定义更新源读取 `metadata.yaml` 时仍访问 `raw.githubusercontent.com`，导致已配置 `github_token` 仍可能受 raw 下载 429 限流影响；现在改用带认证的 GitHub Contents API。
+- 修复 `重新安装插件` 将 GitHub ZIP 直链交给 AstrBot Core 时绕过 `github_proxy`，导致下载重定向到 `codeload.github.com` 后可能触发 429 限流。
 
 本文件记录 AstrBot 插件更新管理器的重要版本变化。
 

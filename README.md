@@ -1,4 +1,4 @@
-# AstrBot 插件更新管理器 v2.5.0
+# AstrBot 插件更新管理器 v2.6.0
 
 用于批量检查并更新已安装的 AstrBot 插件，支持手动更新、灵活定时检查、管理员通知和更新后自动重启。
 
@@ -42,8 +42,31 @@
 | --- | --- | --- | --- |
 | `更新所有插件` | `updateallplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
 | `检查插件更新` | `checkpluginupdates` | 只检查可用更新，不执行更新 | 管理员 |
+| `安装插件 <链接>` | `installplugin` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
+| `清除插件数据 <插件名> --confirm` | `clearplugindata` | 清除插件持久化文件和 KV 数据并重载插件，不删除用户配置 | 管理员 |
 | `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
 | `重启astrbot` | 无 | 调用 Dashboard 接口重启 AstrBot | 管理员 |
+
+### 安装插件
+
+```
+安装插件 https://github.com/owner/repo
+```
+
+该命令直接调用 AstrBot 的原生插件管理器，由 AstrBot 负责仓库解析、下载、元数据校验、依赖安装和加载。链接格式与当前 AstrBot 版本支持的插件仓库格式一致。
+
+AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginKVStoreMixin` 的 `get_kv_data`、`put_kv_data`、`delete_kv_data`，文件数据位于 `data/plugin_data/<插件目录>`。原生 `uninstall_plugin(plugin_name, delete_config=False, delete_data=True)` 在卸载插件时可清理其文件数据和 KV 数据，同时保留插件配置文件；目前没有“保留插件、仅清理其他插件数据”的独立公开接口。本插件安装命令不会清理任何已有数据。
+
+### 清除插件数据
+
+该命令必须显式带上 `--confirm` 才会执行。首次发送不带确认参数的命令只会显示警告，不会修改任何文件：
+
+```
+清除插件数据 astrbot_plugin_demo
+清除插件数据 astrbot_plugin_demo --confirm
+```
+
+确认后复用 AstrBot 的内部清理流程，只传入 `delete_config=False` 和 `delete_data=True`，然后仅重载目标插件。AstrBot 的配置文件不会删除，但插件数据目录和 KV 可能含有用户录入内容，清除后不可恢复；框架未管理的其他路径不会处理。命令拒绝清理本插件、AstrBot 保留插件和不安全目录名；若清理目录仍存在或重载失败，会明确报告，不会宣称操作成功。
 
 ### 重新安装插件
 

@@ -5,6 +5,7 @@ __pycache__/
 .mypy_cache/
 .venv/
 venv/
+.verification_artifacts/
 
 # 测试模式产生的调试文件
 test.md

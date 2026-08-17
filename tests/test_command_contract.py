@@ -74,3 +74,22 @@ class ReinstallInlineRepositoryCommandContractTests(unittest.TestCase):
         self.assertIn("link_only", source)
         self.assertIn("inspect_plugin_repository", source)
         self.assertIn("remote_plugin.get('name')", source)
+
+
+class CustomSourceMetadataRequestContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        cls.method = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "_fetch_custom_source"
+        )
+
+    def test_metadata_uses_authenticated_contents_api_not_raw_host(self):
+        source = ast.unparse(self.method)
+        self.assertIn("/contents/", source)
+        self.assertIn("application/vnd.github.raw+json", source)
+        self.assertNotIn("raw.githubusercontent.com", source)

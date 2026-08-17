@@ -490,9 +490,11 @@ class PluginUpdateManager(Star):
         logger.error("所有插件市场地址均请求失败。")
         return None
 
-    def _github_api_headers(self) -> dict[str, str]:
+    def _github_api_headers(
+        self, accept: str = "application/vnd.github+json"
+    ) -> dict[str, str]:
         headers = {
-            "Accept": "application/vnd.github+json",
+            "Accept": accept,
             "X-GitHub-Api-Version": "2022-11-28",
             "User-Agent": "astrbot-plugin-update-manager",
         }
@@ -501,9 +503,13 @@ class PluginUpdateManager(Star):
         return headers
 
     async def _fetch_text_cached(
-        self, session: aiohttp.ClientSession, url: str
+        self,
+        session: aiohttp.ClientSession,
+        url: str,
+        *,
+        accept: str = "application/vnd.github+json",
     ) -> str:
-        headers = self._github_api_headers()
+        headers = self._github_api_headers(accept)
         cached = self._http_cache.get(url)
         if cached and cached.get("etag"):
             headers["If-None-Match"] = str(cached["etag"])
@@ -559,13 +565,16 @@ class PluginUpdateManager(Star):
         metadata = None
         metadata_error = None
         for filename in ("metadata.yaml", "metadata.yml"):
-            raw_url = apply_github_proxy(
-                f"https://raw.githubusercontent.com/{binding.owner}/"
-                f"{binding.repo}/{commit_sha}/{filename}",
-                self.proxy_address,
+            metadata_api = (
+                f"{repo_api}/contents/{quote(filename, safe='')}?"
+                f"ref={quote(commit_sha, safe='')}"
             )
             try:
-                metadata_text = await self._fetch_text_cached(session, raw_url)
+                metadata_text = await self._fetch_text_cached(
+                    session,
+                    metadata_api,
+                    accept="application/vnd.github.raw+json",
+                )
                 metadata = parse_plugin_metadata(metadata_text)
                 break
             except Exception as exc:

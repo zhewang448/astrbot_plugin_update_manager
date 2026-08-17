@@ -27,7 +27,7 @@
 - **更新结果通知**：可向指定管理员会话发送检查和更新摘要。
 - **更新日志通知**：更新成功后自动读取各插件本地 CHANGELOG，以合并转发消息发送给管理员。
 - **更新后自动重启**：支持在更新成功后通过 AstrBot 本地 Dashboard 接口重启核心。
-- **GitHub 代理支持**：`github_proxy` 加速地址同时作用于自定义源的 raw 文件请求和 zip 下载地址。
+- **GitHub 代理支持**：`github_proxy` 加速地址作用于自定义源的 zip 下载地址。
 - **自定义 GitHub 更新源**：可为未上架插件市场的本地插件绑定仓库，通过远端 `metadata.yaml` 检查版本。
 
 ## 安装
@@ -152,8 +152,8 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 | `check_times` | 方式 2 的每日执行时间列表，格式为 `HH:MM` |
 | `check_on_startup` | 方式 2 下启动后是否立即检查一次 |
 | `admin_sid_list` | 定时检查结束后接收结果的管理员会话 SID |
-| `github_proxy` | GitHub 加速地址，同时作用于 raw 文件请求和 zip 下载；不填则不使用 |
-| `github_token` | 可选 GitHub API Token，用于提高 GitHub API 限额 |
+| `github_proxy` | GitHub 加速地址，作用于自定义源 zip 下载；不填则不使用 |
+| `github_token` | 可选 GitHub API Token，用于自定义源的仓库、提交和 metadata 查询，并提高 GitHub API 限额 |
 | `custom_plugin_sources` | 为已安装插件绑定 GitHub 仓库，可搜索选择本地插件 |
 | `white_plugin_list` | 非空时只检查所选插件，支持搜索和多选 |
 | `black_plugin_list` | 跳过所选插件，支持搜索和多选 |
@@ -173,7 +173,7 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 
 ### GitHub API 说明
 
-自定义更新源检查会通过 GitHub API 查询仓库默认分支和 commit。未填写 `github_token` 时使用匿名请求，频繁检查或多人共享同一出口 IP 时可能遇到 `403 rate limit exceeded`。
+自定义更新源检查会通过 GitHub API 查询仓库默认分支、commit 和远端 metadata。未填写 `github_token` 时使用匿名请求，频繁检查或多人共享同一出口 IP 时可能遇到 API 限流。
 
 如遇到 GitHub API 限流，可按以下步骤获取 Token：
 

@@ -1121,25 +1121,71 @@ class PluginUpdateManager(Star):
     @filter.command("重新安装插件", alias={"reinstallplugin"})
     async def reinstall_plugin_command(self, event: AstrMessageEvent):
         """强制重新下载并安装指定插件，不进行版本比较。"""
-        parts = str(getattr(event, "message_str", "") or "").strip().split(maxsplit=3)
-        if len(parts) < 2 or not parts[1].strip():
+        message_text = str(getattr(event, "message_str", "") or "").strip()
+        command_body = message_text.removeprefix("/").lstrip()
+        for command_name in ("重新安装插件", "reinstallplugin"):
+            if command_body.startswith(command_name):
+                command_body = command_body[len(command_name) :].strip()
+                break
+
+        arguments = command_body.split(maxsplit=2)
+        link_only = bool(arguments) and arguments[0].startswith(
+            ("http://", "https://", "github.com/", "www.github.com/")
+        )
+        if link_only:
+            custom_url = arguments[0]
+            use_proxy = not any(argument == "--no-proxy" for argument in arguments[1:])
+            manager = getattr(self.context, "_star_manager", None)
+            inspect_method = getattr(manager, "inspect_plugin_repository", None)
+            if not callable(inspect_method):
+                yield event.plain_result(
+                    "当前 AstrBot 版本不支持从仓库链接读取插件信息，无法使用仅链接格式。"
+                )
+                return
+            try:
+                inspect_kwargs = {"repo_url": custom_url}
+                if "proxy" in inspect.signature(inspect_method).parameters:
+                    inspect_kwargs["proxy"] = self.proxy_address if use_proxy else ""
+                remote_plugin = await inspect_method(**inspect_kwargs)
+            except Exception as exc:
+                yield event.plain_result(f"读取插件仓库信息失败：{exc}")
+                return
+            target_name = (
+                str(remote_plugin.get("name") or "").strip()
+                if isinstance(remote_plugin, dict)
+                else ""
+            )
+            if not target_name:
+                yield event.plain_result(
+                    "插件仓库缺少有效的 metadata.name，未执行重装。"
+                )
+                return
+        else:
+            parts = message_text.split(maxsplit=3)
+            target_name = parts[1].strip() if len(parts) > 1 else ""
+            custom_url = (
+                parts[2].strip()
+                if len(parts) > 2 and not parts[2].startswith("--")
+                else ""
+            )
+            use_proxy = not any(part == "--no-proxy" for part in parts[2:])
+
+        if not target_name:
             yield event.plain_result(
                 "用法：重新安装插件 <插件名> [GitHub地址或下载URL] [--no-proxy]\n"
+                "或：重新安装插件<GitHub仓库链接> [--no-proxy]\n"
                 "例如：\n"
                 "  重新安装插件 astrbot_plugin_demo\n"
                 "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo\n"
                 "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev\n"
                 "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy\n"
+                "  重新安装插件https://github.com/owner/repo/tree/dev\n"
                 "\n"
                 "不进行版本比较，直接重新下载覆盖安装。\n"
-                "第二个参数可以是：GitHub 仓库地址（自动转为下载链接）、直接下载地址（.zip）。\n"
+                "仅链接格式会读取仓库 metadata.name 定位本地插件；第二个参数可以是 GitHub 仓库地址或直接下载地址（.zip）。\n"
                 "添加 --no-proxy 禁用 github_proxy 加速（默认启用）。"
             )
             return
-
-        target_name = parts[1].strip()
-        custom_url = parts[2].strip() if len(parts) > 2 and not parts[2].startswith("--") else ""
-        use_proxy = not any(p == "--no-proxy" for p in parts[2:])
 
         logger.info(
             f"收到用户命令 '重新安装插件 {target_name}'"

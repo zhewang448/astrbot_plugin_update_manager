@@ -55,3 +55,22 @@ class PluginDataCleanupCommandContractTests(unittest.TestCase):
             [keyword.arg for keyword in reload_call.keywords],
             ["specified_plugin_name"],
         )
+
+
+class ReinstallInlineRepositoryCommandContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        cls.command = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "reinstall_plugin_command"
+        )
+
+    def test_inline_repository_url_reads_remote_metadata_name(self):
+        source = ast.unparse(self.command)
+        self.assertIn("link_only", source)
+        self.assertIn("inspect_plugin_repository", source)
+        self.assertIn("remote_plugin.get('name')", source)

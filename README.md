@@ -45,6 +45,7 @@
 | `安装插件 <链接>` | `installplugin` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
 | `清除插件数据 <插件名> --confirm` | `clearplugindata` | 清除插件持久化文件和 KV 数据并重载插件，不删除用户配置 | 管理员 |
 | `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
+| `重新安装插件<仓库链接> [--no-proxy]` | `reinstallplugin` | 从仓库 metadata.name 定位插件并覆盖重装 | 管理员 |
 | `重启astrbot` | 无 | 调用 Dashboard 接口重启 AstrBot | 管理员 |
 
 ### 安装插件
@@ -87,6 +88,14 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev
 重新安装插件 astrbot_plugin_demo github.com/owner/repo/tree/test
 ```
+
+**仅提供仓库链接**：
+
+```
+重新安装插件https://github.com/zhewang448/astrbot_plugin_update_manager/tree/test
+```
+
+该形式会先调用 AstrBot 原生仓库检查接口，读取远端 `metadata.yaml` 或 `metadata.yml` 中的 `name`，精确定位同名的已加载插件后重装；不会根据仓库名猜测插件名。
 
 - 只给仓库地址时，自动查询并使用默认分支（通常是 `main`）
 - 给 `/tree/分支名` 时，使用指定分支

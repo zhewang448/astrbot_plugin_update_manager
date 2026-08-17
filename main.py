@@ -9,7 +9,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
 
 import aiohttp
 import astrbot.api.message_components as Comp
@@ -72,7 +72,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.5.0",
+    "2.6.0",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -919,28 +919,257 @@ class PluginUpdateManager(Star):
         yield event.plain_result("\n".join(lines)).use_t2i(False)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("安装插件", alias={"installplugin"})
+    async def install_plugin_command(self, event: AstrMessageEvent):
+        """通过 AstrBot 原生插件管理器安装指定仓库。"""
+        parts = str(getattr(event, "message_str", "") or "").strip().split(
+            maxsplit=1
+        )
+        if len(parts) < 2 or not parts[1].strip():
+            yield event.plain_result(
+                "用法：安装插件 <插件仓库链接>\n"
+                "例如：安装插件 https://github.com/owner/repo\n"
+                "也支持 AstrBot 原生接受的 Git/仓库链接格式。"
+            )
+            return
+
+        repo_url = parts[1].strip()
+        if any(character.isspace() for character in repo_url):
+            yield event.plain_result("插件仓库链接不能包含空白字符。")
+            return
+
+        if self._update_lock.locked():
+            yield event.plain_result("已有一次插件更新或安装正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result("正在安装插件，请稍候...")
+        async with self._update_lock:
+            try:
+                install_method = self.context._star_manager.install_plugin
+                install_kwargs = {"repo_url": repo_url}
+                try:
+                    supports_proxy = "proxy" in inspect.signature(
+                        install_method
+                    ).parameters
+                except (TypeError, ValueError):
+                    supports_proxy = False
+                if supports_proxy and self.proxy_address:
+                    install_kwargs["proxy"] = self.proxy_address
+
+                plugin_info = await install_method(**install_kwargs)
+                installed_name = (
+                    plugin_info.get("name")
+                    if isinstance(plugin_info, dict)
+                    else None
+                )
+                suffix = f"：{installed_name}" if installed_name else ""
+                yield event.plain_result(
+                    f"插件安装成功{suffix}。AstrBot 已完成下载、校验、依赖处理并加载。"
+                ).use_t2i(False)
+            except Exception as exc:
+                logger.error(f"安装插件失败：{traceback.format_exc()}")
+                yield event.plain_result(f"插件安装失败：{exc}")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("清除插件数据", alias={"clearplugindata"})
+    async def clear_plugin_data_command(self, event: AstrMessageEvent):
+        """清除指定插件的 AstrBot 持久化数据，并重新加载插件。"""
+        parts = str(getattr(event, "message_str", "") or "").strip().split(
+            maxsplit=2
+        )
+        if len(parts) < 2 or not parts[1].strip():
+            yield event.plain_result(
+                "用法：清除插件数据 <插件名> --confirm\n"
+                "该操作会删除 AstrBot 管理的插件文件数据和 KV 数据，但保留用户配置文件。"
+            )
+            return
+
+        target_name = parts[1].strip()
+        confirmed = len(parts) == 3 and parts[2].strip() == "--confirm"
+        if not confirmed:
+            yield event.plain_result(
+                f"危险操作警告：将清除插件「{target_name}」的 AstrBot 持久化文件数据和 KV 数据。\n"
+                "AstrBot 用户配置文件不会删除，但插件数据目录和 KV 中可能含有用户录入内容，清除后不可恢复。\n"
+                "框架未管理的其他路径不会处理。\n"
+                f"确认操作请发送：清除插件数据 {target_name} --confirm"
+            )
+            return
+
+        target = None
+        get_registered_star = getattr(self.context, "get_registered_star", None)
+        if callable(get_registered_star):
+            target = get_registered_star(target_name)
+        if target is None:
+            candidates = [
+                plugin
+                for plugin in self.context.get_all_stars()
+                if str(getattr(plugin, "root_dir_name", "") or "").strip()
+                == target_name
+            ]
+            if len(candidates) == 1:
+                target = candidates[0]
+
+        if target is None:
+            yield event.plain_result(f"未找到已加载的插件：{target_name}")
+            return
+
+        plugin_name = str(getattr(target, "name", "") or "").strip()
+        root_dir_name = str(getattr(target, "root_dir_name", "") or "").strip()
+        if not plugin_name or not root_dir_name:
+            yield event.plain_result("目标插件信息不完整，未执行任何删除操作。")
+            return
+        if normalize_name(plugin_name) == normalize_name(PLUGIN_NAME):
+            yield event.plain_result("不能清除本插件自身的数据，未执行任何删除操作。")
+            return
+        if (
+            root_dir_name in {".", ".."}
+            or any(char in root_dir_name for char in ("/", "\\", ":"))
+        ):
+            yield event.plain_result("目标插件目录名不安全，未执行任何删除操作。")
+            return
+        if bool(getattr(target, "reserved", False)):
+            yield event.plain_result("不能清除 AstrBot 保留插件的数据，未执行任何删除操作。")
+            return
+
+        manager = getattr(self.context, "_star_manager", None)
+        cleanup_method = getattr(manager, "_cleanup_plugin_optional_artifacts", None)
+        reload_method = getattr(manager, "reload", None)
+        required_cleanup_params = {
+            "root_dir_name",
+            "plugin_label",
+            "plugin_id",
+            "delete_config",
+            "delete_data",
+        }
+        try:
+            cleanup_params = set(inspect.signature(cleanup_method).parameters)
+            reload_params = set(inspect.signature(reload_method).parameters)
+        except (TypeError, ValueError, AttributeError):
+            cleanup_params = set()
+            reload_params = set()
+        if (
+            not callable(cleanup_method)
+            or not callable(reload_method)
+            or not required_cleanup_params.issubset(cleanup_params)
+            or "specified_plugin_name" not in reload_params
+        ):
+            yield event.plain_result(
+                "当前 AstrBot 版本没有可验证的数据清理或插件重载接口，未执行任何删除操作。"
+            )
+            return
+
+        if self._update_lock.locked():
+            yield event.plain_result("已有一次插件更新、安装或数据清理正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result(
+            f"已确认，正在清除插件「{plugin_name}」的数据并重载插件，请稍候..."
+        )
+        async with self._update_lock:
+            try:
+                await cleanup_method(
+                    root_dir_name=root_dir_name,
+                    plugin_label=plugin_name,
+                    plugin_id=str(getattr(target, "plugin_id", "") or "") or None,
+                    delete_config=False,
+                    delete_data=True,
+                )
+                reload_result = await reload_method(specified_plugin_name=plugin_name)
+                reload_ok = (
+                    bool(reload_result[0])
+                    if isinstance(reload_result, tuple) and reload_result
+                    else reload_result is not False
+                )
+                if not reload_ok:
+                    detail = (
+                        reload_result[1]
+                        if isinstance(reload_result, tuple) and len(reload_result) > 1
+                        else "未知错误"
+                    )
+                    yield event.plain_result(
+                        f"插件「{plugin_name}」的数据清理已执行，但重载失败：{detail}\n"
+                        "用户配置文件未删除，请手动检查插件状态。"
+                    )
+                    return
+                yield event.plain_result(
+                    f"插件「{plugin_name}」的 AstrBot 持久化数据清理已执行，用户配置文件未删除，插件已重载。"
+                ).use_t2i(False)
+            except Exception as exc:
+                logger.error(f"清除插件 {plugin_name} 数据失败：{traceback.format_exc()}")
+                yield event.plain_result(
+                    f"清除插件「{plugin_name}」数据或重载失败：{exc}\n"
+                    "未执行配置文件删除，请手动检查插件状态。"
+                )
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("重新安装插件", alias={"reinstallplugin"})
     async def reinstall_plugin_command(self, event: AstrMessageEvent):
         """强制重新下载并安装指定插件，不进行版本比较。"""
-        parts = str(getattr(event, "message_str", "") or "").strip().split(maxsplit=3)
-        if len(parts) < 2 or not parts[1].strip():
+        message_text = str(getattr(event, "message_str", "") or "").strip()
+        command_body = message_text.removeprefix("/").lstrip()
+        for command_name in ("重新安装插件", "reinstallplugin"):
+            if command_body.startswith(command_name):
+                command_body = command_body[len(command_name) :].strip()
+                break
+
+        arguments = command_body.split(maxsplit=2)
+        link_only = bool(arguments) and arguments[0].startswith(
+            ("http://", "https://", "github.com/", "www.github.com/")
+        )
+        if link_only:
+            custom_url = arguments[0]
+            use_proxy = not any(argument == "--no-proxy" for argument in arguments[1:])
+            manager = getattr(self.context, "_star_manager", None)
+            inspect_method = getattr(manager, "inspect_plugin_repository", None)
+            if not callable(inspect_method):
+                yield event.plain_result(
+                    "当前 AstrBot 版本不支持从仓库链接读取插件信息，无法使用仅链接格式。"
+                )
+                return
+            try:
+                inspect_kwargs = {"repo_url": custom_url}
+                if "proxy" in inspect.signature(inspect_method).parameters:
+                    inspect_kwargs["proxy"] = self.proxy_address if use_proxy else ""
+                remote_plugin = await inspect_method(**inspect_kwargs)
+            except Exception as exc:
+                yield event.plain_result(f"读取插件仓库信息失败：{exc}")
+                return
+            target_name = (
+                str(remote_plugin.get("name") or "").strip()
+                if isinstance(remote_plugin, dict)
+                else ""
+            )
+            if not target_name:
+                yield event.plain_result(
+                    "插件仓库缺少有效的 metadata.name，未执行重装。"
+                )
+                return
+        else:
+            parts = message_text.split(maxsplit=3)
+            target_name = parts[1].strip() if len(parts) > 1 else ""
+            custom_url = (
+                parts[2].strip()
+                if len(parts) > 2 and not parts[2].startswith("--")
+                else ""
+            )
+            use_proxy = not any(part == "--no-proxy" for part in parts[2:])
+
+        if not target_name:
             yield event.plain_result(
                 "用法：重新安装插件 <插件名> [GitHub地址或下载URL] [--no-proxy]\n"
+                "或：重新安装插件<GitHub仓库链接> [--no-proxy]\n"
                 "例如：\n"
                 "  重新安装插件 astrbot_plugin_demo\n"
                 "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo\n"
                 "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo/tree/dev\n"
                 "  重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy\n"
+                "  重新安装插件https://github.com/owner/repo/tree/dev\n"
                 "\n"
                 "不进行版本比较，直接重新下载覆盖安装。\n"
-                "第二个参数可以是：GitHub 仓库地址（自动转为下载链接）、直接下载地址（.zip）。\n"
+                "仅链接格式会读取仓库 metadata.name 定位本地插件；第二个参数可以是 GitHub 仓库地址或直接下载地址（.zip）。\n"
                 "添加 --no-proxy 禁用 github_proxy 加速（默认启用）。"
             )
             return
-
-        target_name = parts[1].strip()
-        custom_url = parts[2].strip() if len(parts) > 2 and not parts[2].startswith("--") else ""
-        use_proxy = not any(p == "--no-proxy" for p in parts[2:])
 
         logger.info(
             f"收到用户命令 '重新安装插件 {target_name}'"
@@ -1061,7 +1290,8 @@ class PluginUpdateManager(Star):
                 )
                 return
 
-            await update_method(**update_kwargs)
+            async with self._update_lock:
+                await update_method(**update_kwargs)
             proxy_status = "已启用代理加速" if use_proxy and self.proxy_address else "未使用代理"
             yield event.plain_result(
                 f"插件 {plugin_name} 重新安装成功（覆盖式）。\n"

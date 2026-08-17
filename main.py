@@ -1058,15 +1058,6 @@ class PluginUpdateManager(Star):
             )
             return
 
-        data_paths = []
-        plugin_store_path = getattr(manager, "plugin_store_path", "")
-        if plugin_store_path:
-            data_root = Path(plugin_store_path).resolve().parent
-            data_paths = [
-                data_root / "plugin_data" / root_dir_name,
-                data_root / "plugins_data" / root_dir_name,
-            ]
-
         if self._update_lock.locked():
             yield event.plain_result("已有一次插件更新、安装或数据清理正在执行，请稍后再试。")
             return
@@ -1089,7 +1080,6 @@ class PluginUpdateManager(Star):
                     if isinstance(reload_result, tuple) and reload_result
                     else reload_result is not False
                 )
-                remaining_paths = [str(path) for path in data_paths if path.exists()]
                 if not reload_ok:
                     detail = (
                         reload_result[1]
@@ -1099,12 +1089,6 @@ class PluginUpdateManager(Star):
                     yield event.plain_result(
                         f"插件「{plugin_name}」的数据清理已执行，但重载失败：{detail}\n"
                         "用户配置文件未删除，请手动检查插件状态。"
-                    )
-                    return
-                if remaining_paths:
-                    yield event.plain_result(
-                        f"插件「{plugin_name}」已重载，但以下数据目录仍存在，可能未能完全清理：\n"
-                        + "\n".join(remaining_paths)
                     )
                     return
                 yield event.plain_result(

@@ -1291,7 +1291,12 @@ class PluginUpdateManager(Star):
             proxy_to_use = self.proxy_address if use_proxy else ""
             update_kwargs = {"plugin_name": plugin_name, "proxy": proxy_to_use}
             if supports_download_url and download_url:
-                update_kwargs["download_url"] = download_url
+                # AstrBot Core 对 download_url 直接下载，不会再套用 proxy；
+                # 在交给 Core 前处理 GitHub 直链，避免绕过配置的加速地址。
+                update_kwargs["download_url"] = apply_github_proxy(
+                    download_url,
+                    proxy_to_use,
+                )
             elif custom_url and not supports_download_url:
                 yield event.plain_result(
                     f"当前 AstrBot 版本不支持指定下载地址。\n"

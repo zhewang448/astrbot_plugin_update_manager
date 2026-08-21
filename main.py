@@ -16,7 +16,7 @@ import astrbot.api.message_components as Comp
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, MessageChain, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, StarTools, register
 from astrbot.core.config.astrbot_config import AstrBotConfig
 from astrbot.core.utils.version_comparator import VersionComparator
 
@@ -72,7 +72,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.6.0",
+    "2.6.1",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -105,6 +105,10 @@ class PluginUpdateManager(Star):
         self.scheduler: AsyncIOScheduler | None = None
         self._startup_task: asyncio.Task | None = None
         self._update_lock = asyncio.Lock()
+
+        self._pending_restart_path = (
+            StarTools.get_data_dir(PLUGIN_NAME) / "pending_restart.json"
+        )
 
         if self.proxy_address:
             logger.info(f"使用 GitHub 代理：{self.proxy_address}")
@@ -147,6 +151,39 @@ class PluginUpdateManager(Star):
         if self.dashboard:
             await self.dashboard.terminate()
             logger.info("重启模块连接已断开。")
+
+    @_compatible_filter_hook("on_astrbot_loaded")
+    async def on_astrbot_loaded(self):
+        """AstrBot 重启完成后，向触发手动重启的会话发送回告。"""
+        if not self._pending_restart_path.exists():
+            return
+
+        try:
+            pending = json.loads(self._pending_restart_path.read_text(encoding="utf-8"))
+            session = pending.get("session") if isinstance(pending, dict) else None
+            if not isinstance(session, str) or not session.strip():
+                raise ValueError("待通知重启会话无效")
+            await self.context.send_message(
+                session,
+                MessageChain([Comp.Plain(text="AstrBot 已重启完成。")]),
+            )
+        except Exception as exc:
+            logger.error(f"重启完成后发送通知失败：{exc}")
+            return
+
+        with suppress(OSError):
+            self._pending_restart_path.unlink()
+
+    async def _save_pending_restart(self, session: str) -> None:
+        self._pending_restart_path.parent.mkdir(parents=True, exist_ok=True)
+        self._pending_restart_path.write_text(
+            json.dumps({"session": session}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _clear_pending_restart(self) -> None:
+        with suppress(OSError):
+            self._pending_restart_path.unlink()
 
     def _initialize_scheduler(self) -> None:
         self.scheduler = AsyncIOScheduler()
@@ -602,8 +639,10 @@ class PluginUpdateManager(Star):
     async def restart_astrbot_command(self, event: AstrMessageEvent):
         logger.info("收到用户命令 '重启astrbot'。")
         yield event.plain_result("正在重启，请稍候...")
+        await self._save_pending_restart(event.unified_msg_origin)
         error_message = await self.restart_command(notify_admin=False)
         if error_message:
+            self._clear_pending_restart()
             yield event.plain_result(error_message)
 
     @staticmethod

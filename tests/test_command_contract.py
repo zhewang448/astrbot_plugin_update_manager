@@ -93,3 +93,40 @@ class CustomSourceMetadataRequestContractTests(unittest.TestCase):
         self.assertIn("/contents/", source)
         self.assertIn("application/vnd.github.raw+json", source)
         self.assertNotIn("raw.githubusercontent.com", source)
+
+
+class ManualRestartCompletionNotificationContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name
+            in {
+                "restart_astrbot_command",
+                "on_astrbot_loaded",
+                "_save_pending_restart",
+            }
+        }
+        cls.command = methods["restart_astrbot_command"]
+        cls.loaded_hook = methods["on_astrbot_loaded"]
+        cls.save_pending_restart = methods["_save_pending_restart"]
+
+    def test_manual_restart_persists_origin_before_requesting_restart(self):
+        source = ast.unparse(self.command)
+        self.assertIn("await self._save_pending_restart(event.unified_msg_origin)", source)
+        self.assertIn("self._clear_pending_restart()", source)
+
+    def test_startup_hook_notifies_pending_session_and_clears_record(self):
+        decorators = [ast.unparse(item) for item in self.loaded_hook.decorator_list]
+        source = ast.unparse(self.loaded_hook)
+        self.assertIn("_compatible_filter_hook('on_astrbot_loaded')", decorators)
+        self.assertIn("await self.context.send_message(session, MessageChain([Comp.Plain(text='AstrBot 已重启完成。')]))", source)
+        self.assertIn("self._pending_restart_path.unlink()", source)
+
+    def test_pending_record_uses_plugin_data_directory(self):
+        source = ast.unparse(self.save_pending_restart)
+        self.assertIn("json.dumps({'session': session}, ensure_ascii=False)", source)

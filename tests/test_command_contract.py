@@ -103,12 +103,14 @@ class ManualRestartCompletionNotificationContractTests(unittest.TestCase):
         methods = {
             node.name: node
             for node in ast.walk(tree)
-            if isinstance(node, ast.AsyncFunctionDef)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
             and node.name
             in {
                 "restart_astrbot_command",
                 "on_astrbot_loaded",
                 "on_platform_loaded",
+                "_schedule_pending_restart_notification",
+                "_retry_pending_restart_notification",
                 "_notify_pending_restart",
                 "_save_pending_restart",
             }
@@ -135,7 +137,22 @@ class ManualRestartCompletionNotificationContractTests(unittest.TestCase):
         decorators = [ast.unparse(item) for item in self.platform_hook.decorator_list]
         source = ast.unparse(self.platform_hook)
         self.assertIn("_compatible_filter_hook('on_platform_loaded')", decorators)
-        self.assertIn("await self._notify_pending_restart()", source)
+        self.assertIn("self._schedule_pending_restart_notification()", source)
+
+    def test_notification_uses_delayed_retries_until_platform_api_is_ready(self):
+        tree = ast.parse(Path(__file__).resolve().parents[1].joinpath("main.py").read_text(encoding="utf-8"))
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name in {"_schedule_pending_restart_notification", "_retry_pending_restart_notification"}
+        }
+        schedule_source = ast.unparse(methods["_schedule_pending_restart_notification"])
+        retry_source = ast.unparse(methods["_retry_pending_restart_notification"])
+        self.assertIn("asyncio.create_task", schedule_source)
+        self.assertIn("await asyncio.sleep(5)", retry_source)
+        self.assertIn("for attempt in range(1, 13)", retry_source)
+        self.assertIn("if await self._notify_pending_restart()", retry_source)
 
     def test_notification_keeps_record_when_delivery_is_not_confirmed(self):
         source = ast.unparse(self.notify_pending_restart)

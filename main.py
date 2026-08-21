@@ -155,20 +155,33 @@ class PluginUpdateManager(Star):
     @_compatible_filter_hook("on_astrbot_loaded")
     async def on_astrbot_loaded(self):
         """AstrBot 重启完成后，向触发手动重启的会话发送回告。"""
+        await self._notify_pending_restart()
+
+    @_compatible_filter_hook("on_platform_loaded")
+    async def on_platform_loaded(self):
+        """平台加载完成后重试重启完成通知，确保主动发送接口已可用。"""
+        await self._notify_pending_restart()
+
+    async def _notify_pending_restart(self) -> None:
+        """发送待发送的重启完成通知，成功前保留记录以便后续重试。"""
         if not self._pending_restart_path.exists():
             return
 
+        session = None
         try:
             pending = json.loads(self._pending_restart_path.read_text(encoding="utf-8"))
             session = pending.get("session") if isinstance(pending, dict) else None
             if not isinstance(session, str) or not session.strip():
                 raise ValueError("待通知重启会话无效")
-            await self.context.send_message(
+            sent = await self.context.send_message(
                 session,
                 MessageChain([Comp.Plain(text="AstrBot 已重启完成。")]),
             )
+            if not sent:
+                logger.warning(f"重启完成通知未找到可用平台，会话：{session}")
+                return
         except Exception as exc:
-            logger.error(f"重启完成后发送通知失败：{exc}")
+            logger.error(f"重启完成后发送通知失败，会话：{session!r}，异常：{exc!r}")
             return
 
         with suppress(OSError):

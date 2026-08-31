@@ -219,6 +219,10 @@ def test_astrbot_update_commands_check_before_starting_update():
     assert schema["astrbot_auto_update"]["condition"] == {
         "astrbot_update_enabled": True
     }
+    assert schema["astrbot_send_changelog_to_admin"]["default"] is True
+    assert schema["astrbot_send_changelog_to_admin"]["condition"] == {
+        "astrbot_update_enabled": True
+    }
     assert schema["astrbot_schedule_mode"]["default"] == "interval"
     assert schema["astrbot_interval_hours"]["default"] == 24
     assert schema["astrbot_check_weekdays"]["default"] == [

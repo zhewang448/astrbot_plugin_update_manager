@@ -151,6 +151,12 @@
     "type": "bool",
     "default": false
   },
+  "send_changelog_to_admin": {
+    "description": "插件更新：成功后发送更新日志",
+    "type": "bool",
+    "hint": "更新成功后读取各插件本地 CHANGELOG.md，截取新旧版本区间的内容，以合并转发消息发送给 admin_sid_list 中的管理员；仅发送有 CHANGELOG 的插件",
+    "default": false
+  },
   "astrbot_update_enabled": {
     "description": "启用 AstrBot 框架更新功能",
     "type": "bool",
@@ -162,6 +168,15 @@
     "type": "bool",
     "hint": "启用独立的 AstrBot 框架定时更新；其时间配置与插件更新互不影响",
     "default": false,
+    "condition": {
+      "astrbot_update_enabled": true
+    }
+  },
+  "astrbot_send_changelog_to_admin": {
+    "description": "AstrBot 框架：成功后发送更新日志",
+    "type": "bool",
+    "hint": "更新成功后，将 AstrBot 发布版本的更新日志发送到管理员 SID 列表；关闭后不影响更新和重启",
+    "default": true,
     "condition": {
       "astrbot_update_enabled": true
     }
@@ -255,12 +270,6 @@
       "astrbot_auto_update": true,
       "astrbot_schedule_mode": "calendar"
     }
-  },
-  "send_changelog_to_admin": {
-    "description": "插件更新：成功后发送更新日志",
-    "type": "bool",
-    "hint": "更新成功后读取各插件本地 CHANGELOG.md，截取新旧版本区间的内容，以合并转发消息发送给 admin_sid_list 中的管理员；仅发送有 CHANGELOG 的插件",
-    "default": false
   },
   "test_mode": {
     "description": "调试：测试模式",

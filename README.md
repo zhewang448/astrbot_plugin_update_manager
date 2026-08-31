@@ -59,7 +59,7 @@
 更新astrbot
 ```
 
-框架更新复用本机 AstrBot Dashboard 的原生更新服务：先下载并校验 WebUI 与核心包，再更新 `requirements.txt` 依赖。插件持续查询该服务的进度；任务成功后才发起重启，并在框架再次启动后向原会话发送完成回告。更新成功时，会将对应 AstrBot 发布版本的更新日志发送到 `admin_sid_list`。
+框架更新复用本机 AstrBot Dashboard 的原生更新服务：先下载并校验 WebUI 与核心包，再更新 `requirements.txt` 依赖。插件持续查询该服务的进度；任务成功后才发起重启，并在框架再次启动后向原会话发送完成回告。`astrbot_send_changelog_to_admin` 开启时，更新成功会将对应 AstrBot 发布版本的更新日志发送到 `admin_sid_list`。
 
 `更新astrbot` 会先检查可用更新；当前版本已是最新时直接返回结果，不会启动更新任务。`更新所有插件` 保持只更新插件，不会隐式更新 AstrBot 框架。关闭 `astrbot_update_enabled` 后，框架检查、手动更新与定时框架更新都会停止，但 `重启astrbot` 仍可使用。框架更新不支持的启动模式或 Desktop 托管后端会直接返回 AstrBot 原生的状态说明。
 
@@ -177,8 +177,11 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 | `check_weekdays` | 插件更新：方式 2 的每周执行日期 |
 | `check_times` | 插件更新：方式 2 的每日执行时间列表，格式为 `HH:MM` |
 | `check_on_startup` | 插件更新：方式 2 下启动后是否立即检查一次 |
+| `restart_mode` | 插件更新：有插件更新成功后是否自动重启 AstrBot |
+| `send_changelog_to_admin` | 插件更新：成功后读取本地 CHANGELOG，以合并转发发送给管理员 |
 | `astrbot_update_enabled` | AstrBot 框架：总开关，默认开启；不影响 `重启astrbot` |
 | `astrbot_auto_update` | AstrBot 框架：是否启用独立定时更新，默认关闭 |
+| `astrbot_send_changelog_to_admin` | AstrBot 框架：成功后是否向管理员发送发布更新日志，默认开启 |
 | `astrbot_schedule_mode` | AstrBot 框架：`interval` 为固定间隔，`calendar` 为指定星期和时间 |
 | `astrbot_interval_hours` | AstrBot 框架：方式 1 的检查间隔，单位为小时 |
 | `astrbot_check_weekdays` | AstrBot 框架：方式 2 的每周执行日期 |
@@ -190,8 +193,6 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 | `custom_plugin_sources` | 插件更新：为已安装插件绑定 GitHub 仓库，可搜索选择本地插件 |
 | `white_plugin_list` | 插件更新：非空时只检查所选插件，支持搜索和多选 |
 | `black_plugin_list` | 插件更新：跳过所选插件，支持搜索和多选 |
-| `restart_mode` | 插件更新：有插件更新成功后是否自动重启 AstrBot |
-| `send_changelog_to_admin` | 插件更新：成功后读取本地 CHANGELOG，以合并转发发送给管理员 |
 | `test_mode` | 调试：在插件目录生成 `test.md` 调试数据 |
 
 黑名单优先于白名单。测试分支或不希望自动更新的插件，应主动加入黑名单。
@@ -242,7 +243,7 @@ Token 仅用于 GitHub API 请求认证，不会显示在运行日志中。请�
 - 插件版本无法比较、市场不存在或匹配有歧义时，会跳过该插件并在结果中说明。
 - 重启功能通过 AstrBot 本地 Dashboard 接口完成，不需要安装其他重启插件。
 - 框架更新由 AstrBot 原生更新器执行；`更新astrbot` 会等待任务成功后再重启，等待超时则保留任务运行状态，不会强制重启。
-- AstrBot 框架更新成功后会发送对应发布版本的更新日志到 `admin_sid_list`；发布服务暂时不可用时不影响更新和重启。
+- `astrbot_send_changelog_to_admin` 开启时，AstrBot 框架更新成功后会发送对应发布版本的更新日志到 `admin_sid_list`；发布服务暂时不可用时不影响更新和重启。
 
 ## 致谢
 

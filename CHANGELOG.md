@@ -10,6 +10,7 @@
 - 新增 `astrbot_update_enabled` 总开关和 `astrbot_auto_update` 定时更新开关；框架更新拥有独立调度设置。
 - AstrBot 框架更新成功后向 `admin_sid_list` 发送对应发布版本的更新日志。
 - 现有定时字段均明确标注为插件更新用途，并保留原字段名和值，避免升级时丢失既有配置。
+- 新增 `astrbot_send_changelog_to_admin` 配置项，可单独控制框架更新日志通知，默认开启。
 
 ## v2.6.1
 

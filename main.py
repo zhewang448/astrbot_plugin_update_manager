@@ -95,6 +95,9 @@ class PluginUpdateManager(Star):
         self.restart_mode = self.config.get("restart_mode", False)
         self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
         self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
+        self.astrbot_send_changelog_to_admin = self.config.get(
+            "astrbot_send_changelog_to_admin", True
+        )
         self.astrbot_schedule_mode = self.config.get(
             "astrbot_schedule_mode", "interval"
         )
@@ -501,7 +504,7 @@ class PluginUpdateManager(Star):
             return f"AstrBot 当前为 {current_version}，已经是最新版本。", False, ""
 
         release = None
-        if self.admin_sid_list:
+        if self.astrbot_send_changelog_to_admin and self.admin_sid_list:
             try:
                 release = await dashboard.get_astrbot_latest_release()
             except Exception as exc:

@@ -154,7 +154,7 @@ def test_astrbot_update_commands_check_before_starting_update():
     functions = {
         node.name: node
         for node in ast.walk(module)
-        if isinstance(node, ast.AsyncFunctionDef)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
     }
 
     check_command = functions["check_astrbot_update_command"]
@@ -206,8 +206,35 @@ def test_astrbot_update_commands_check_before_starting_update():
     ]
 
     schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
+    legacy_plugin_schedule = {
+        "schedule_mode",
+        "interval_hours",
+        "check_weekdays",
+        "check_times",
+        "check_on_startup",
+    }
+    assert legacy_plugin_schedule.issubset(schema)
     assert schema["astrbot_update_enabled"]["default"] is True
     assert schema["astrbot_auto_update"]["default"] is False
     assert schema["astrbot_auto_update"]["condition"] == {
         "astrbot_update_enabled": True
     }
+    assert schema["astrbot_schedule_mode"]["default"] == "interval"
+    assert schema["astrbot_interval_hours"]["default"] == 24
+    assert schema["astrbot_check_weekdays"]["default"] == [
+        "mon",
+        "tue",
+        "wed",
+        "thu",
+        "fri",
+        "sat",
+        "sun",
+    ]
+    assert schema["astrbot_check_times"]["default"] == ["04:00"]
+    assert schema["astrbot_check_on_startup"]["default"] is False
+
+    scheduler = functions["_initialize_scheduler"]
+    scheduler_source = ast.get_source_segment(source, scheduler)
+    assert "self._scheduled_update_check" in scheduler_source
+    assert "self._scheduled_astrbot_update" in scheduler_source
+    assert "self.astrbot_schedule_mode" in scheduler_source

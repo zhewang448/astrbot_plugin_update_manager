@@ -95,6 +95,18 @@ class PluginUpdateManager(Star):
         self.restart_mode = self.config.get("restart_mode", False)
         self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
         self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
+        self.astrbot_schedule_mode = self.config.get(
+            "astrbot_schedule_mode", "interval"
+        )
+        self.astrbot_interval_hours = self.config.get("astrbot_interval_hours", 24)
+        self.astrbot_check_weekdays = self.config.get(
+            "astrbot_check_weekdays",
+            ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        )
+        self.astrbot_check_times = self.config.get("astrbot_check_times", ["04:00"])
+        self.astrbot_check_on_startup = self.config.get(
+            "astrbot_check_on_startup", False
+        )
         self.custom_plugin_sources = list(
             self.config.get("custom_plugin_sources", []) or []
         )
@@ -106,6 +118,7 @@ class PluginUpdateManager(Star):
         self.dashboard: DashboardClient | None = None
         self.scheduler: AsyncIOScheduler | None = None
         self._startup_task: asyncio.Task | None = None
+        self._astrbot_startup_task: asyncio.Task | None = None
         self._pending_restart_task: asyncio.Task | None = None
         self._update_lock = asyncio.Lock()
 
@@ -134,6 +147,16 @@ class PluginUpdateManager(Star):
                 self._scheduled_update_check(),
                 name=f"{PLUGIN_NAME}:startup-check",
             )
+        if (
+            self.astrbot_update_enabled
+            and self.astrbot_auto_update
+            and self.astrbot_schedule_mode == "calendar"
+            and self.astrbot_check_on_startup
+        ):
+            self._astrbot_startup_task = asyncio.create_task(
+                self._scheduled_astrbot_update(),
+                name=f"{PLUGIN_NAME}:astrbot-startup-check",
+            )
 
     async def terminate(self):
         startup_task = self._startup_task
@@ -146,6 +169,17 @@ class PluginUpdateManager(Star):
             startup_task.cancel()
             with suppress(asyncio.CancelledError):
                 await startup_task
+
+        astrbot_startup_task = self._astrbot_startup_task
+        self._astrbot_startup_task = None
+        if (
+            astrbot_startup_task
+            and not astrbot_startup_task.done()
+            and astrbot_startup_task is not asyncio.current_task()
+        ):
+            astrbot_startup_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await astrbot_startup_task
 
         pending_restart_task = self._pending_restart_task
         self._pending_restart_task = None
@@ -228,59 +262,88 @@ class PluginUpdateManager(Star):
 
     def _initialize_scheduler(self) -> None:
         self.scheduler = AsyncIOScheduler()
-        job_count = 0
+        def add_jobs(
+            *,
+            mode: object,
+            interval: object,
+            weekdays_value: object,
+            times_value: object,
+            job,
+            identifier: str,
+            label: str,
+        ) -> int:
+            if mode == "calendar":
+                weekdays, invalid_weekdays = normalize_weekdays(weekdays_value)
+                check_times, invalid_times = parse_check_times(times_value)
+                if invalid_weekdays:
+                    logger.warning(f"{label}：已忽略无效星期值：{invalid_weekdays}")
+                if invalid_times:
+                    logger.warning(
+                        f"{label}：已忽略无效检查时间：{invalid_times}，请使用 HH:MM 格式。"
+                    )
+                if not weekdays or not check_times:
+                    logger.warning(f"{label}：日历方式未配置有效的星期和时间。")
+                    return 0
 
-        if self.schedule_mode == "calendar":
-            weekdays, invalid_weekdays = normalize_weekdays(self.check_weekdays)
-            check_times, invalid_times = parse_check_times(self.check_times)
-            if invalid_weekdays:
-                logger.warning(f"已忽略无效星期值：{invalid_weekdays}")
-            if invalid_times:
-                logger.warning(f"已忽略无效检查时间：{invalid_times}，请使用 HH:MM 格式。")
-
-            if weekdays and check_times:
                 day_of_week = ",".join(weekdays)
                 for check_time in check_times:
                     hour, minute = (int(value) for value in check_time.split(":"))
                     self.scheduler.add_job(
-                        self._scheduled_update_check,
+                        job,
                         "cron",
                         day_of_week=day_of_week,
                         hour=hour,
                         minute=minute,
-                        id=f"calendar_plugin_update_{hour:02d}{minute:02d}",
-                        name=f"Plugin Update Check {check_time}",
+                        id=f"calendar_{identifier}_{hour:02d}{minute:02d}",
+                        name=f"{label} {check_time}",
                         coalesce=True,
                         max_instances=1,
                         misfire_grace_time=60,
                     )
-                    job_count += 1
-                logger.info(
-                    f"已启用定时方式 2：每周 {day_of_week}，在 {check_times} 检查更新。"
-                )
-            else:
-                logger.warning("定时方式 2 未配置有效的星期和时间，本次不创建定时任务。")
-        else:
+                logger.info(f"{label}：每周 {day_of_week}，在 {check_times} 执行。")
+                return len(check_times)
+
             try:
-                interval_hours = float(self.interval_hours)
+                interval_hours = float(interval)
             except (TypeError, ValueError):
                 interval_hours = 0
-                logger.warning(f"无效的检查间隔：{self.interval_hours}")
-            if interval_hours > 0:
-                self.scheduler.add_job(
-                    self._scheduled_update_check,
-                    "interval",
-                    hours=interval_hours,
-                    id="interval_plugin_update",
-                    name="Interval Plugin Update Check",
-                    coalesce=True,
-                    max_instances=1,
-                    misfire_grace_time=60,
-                )
-                job_count = 1
-                logger.info(f"已启用定时方式 1：启动后每 {interval_hours:g} 小时检查一次。")
-            else:
-                logger.info("定时方式 1 的间隔为 0，未启用定时检查。")
+                logger.warning(f"{label}：无效的检查间隔：{interval}")
+            if interval_hours <= 0:
+                logger.info(f"{label}：间隔为 0，未启用定时任务。")
+                return 0
+
+            self.scheduler.add_job(
+                job,
+                "interval",
+                hours=interval_hours,
+                id=f"interval_{identifier}",
+                name=label,
+                coalesce=True,
+                max_instances=1,
+                misfire_grace_time=60,
+            )
+            logger.info(f"{label}：每 {interval_hours:g} 小时执行一次。")
+            return 1
+
+        job_count = add_jobs(
+            mode=self.schedule_mode,
+            interval=self.interval_hours,
+            weekdays_value=self.check_weekdays,
+            times_value=self.check_times,
+            job=self._scheduled_update_check,
+            identifier="plugin_update",
+            label="插件更新定时任务",
+        )
+        if self.astrbot_update_enabled and self.astrbot_auto_update:
+            job_count += add_jobs(
+                mode=self.astrbot_schedule_mode,
+                interval=self.astrbot_interval_hours,
+                weekdays_value=self.astrbot_check_weekdays,
+                times_value=self.astrbot_check_times,
+                job=self._scheduled_astrbot_update,
+                identifier="astrbot_update",
+                label="AstrBot 框架更新定时任务",
+            )
 
         if job_count:
             self.scheduler.start()
@@ -370,27 +433,32 @@ class PluginUpdateManager(Star):
 
         logger.info("定时任务：正在检查并更新插件...")
         final_message, need_to_restart = await self._check_and_perform_updates()
-        messages = [final_message]
+        await self.send_message_to_admin([Comp.Plain(text=final_message)])
+        if need_to_restart:
+            await self.restart_command()
 
-        if self.astrbot_update_enabled and self.astrbot_auto_update:
-            try:
-                async with self._update_lock:
-                    astrbot_message, astrbot_need_restart, astrbot_changelog = (
-                        await self._perform_astrbot_update()
-                    )
-            except Exception as exc:
-                logger.error(f"定时更新 AstrBot 框架失败：{traceback.format_exc()}")
-                astrbot_message = f"AstrBot 定时更新失败：{exc}"
-                astrbot_need_restart = False
-                astrbot_changelog = ""
-            messages.append(astrbot_message)
-            need_to_restart = need_to_restart or astrbot_need_restart
-        else:
-            astrbot_changelog = ""
+    async def _scheduled_astrbot_update(self):
+        if not self.astrbot_update_enabled or not self.astrbot_auto_update:
+            return
+        if self._update_lock.locked():
+            logger.warning("AstrBot 定时更新：已有更新任务正在执行，本次跳过。")
+            return
 
-        await self.send_message_to_admin([Comp.Plain(text="\n\n".join(messages))])
-        if astrbot_changelog:
-            await self.send_message_to_admin([Comp.Plain(text=astrbot_changelog)])
+        logger.info("AstrBot 定时更新：正在检查框架更新...")
+        try:
+            async with self._update_lock:
+                result_message, need_to_restart, changelog = (
+                    await self._perform_astrbot_update()
+                )
+        except Exception as exc:
+            logger.error(f"AstrBot 定时更新失败：{traceback.format_exc()}")
+            result_message = f"AstrBot 定时更新失败：{exc}"
+            need_to_restart = False
+            changelog = ""
+
+        await self.send_message_to_admin([Comp.Plain(text=result_message)])
+        if changelog:
+            await self.send_message_to_admin([Comp.Plain(text=changelog)])
         if need_to_restart:
             await self.restart_command()
 

@@ -1,4 +1,5 @@
 import ast
+import json
 import logging
 import sys
 import types
@@ -55,6 +56,7 @@ def build_client(responses):
     client._session = FakeSession(responses)
     client.core_update_check_url = "http://localhost/api/update/check"
     client.core_update_url = "http://localhost/api/update/do"
+    client.core_update_releases_url = "http://localhost/api/update/releases"
     client.core_update_progress_url = "http://localhost/api/update/progress"
     client._generate_jwt = lambda: "test-token"
     return client
@@ -117,8 +119,38 @@ async def test_framework_update_uses_dashboard_progress_endpoints():
     ]
 
 
+@pytest.mark.asyncio
+async def test_framework_update_reads_latest_release_notes():
+    client = build_client(
+        [
+            {
+                "status": "ok",
+                "data": [
+                    {
+                        "tag_name": "v4.28.0",
+                        "published_at": "2026-09-01T00:00:00Z",
+                        "body": "- 修复更新流程",
+                    }
+                ],
+            }
+        ]
+    )
+
+    release = await client.get_astrbot_latest_release()
+
+    assert release == {"version": "v4.28.0", "notes": "- 修复更新流程"}
+    assert client._session.calls == [
+        (
+            "GET",
+            "http://localhost/api/update/releases",
+            {"headers": {"Authorization": "Bearer test-token"}, "json": None},
+        )
+    ]
+
+
 def test_astrbot_update_commands_check_before_starting_update():
-    module = ast.parse(Path("main.py").read_text(encoding="utf-8"))
+    source = Path("main.py").read_text(encoding="utf-8")
+    module = ast.parse(source)
     functions = {
         node.name: node
         for node in ast.walk(module)
@@ -127,6 +159,7 @@ def test_astrbot_update_commands_check_before_starting_update():
 
     check_command = functions["check_astrbot_update_command"]
     update_command = functions["update_astrbot_command"]
+    update_helper = functions["_perform_astrbot_update"]
     command_names = {}
     for function in (check_command, update_command):
         decorator = next(
@@ -150,9 +183,12 @@ def test_astrbot_update_commands_check_before_starting_update():
         {"updateastrbot", "astrbotupdate", "更新AstrBot"},
     )
 
+    assert "astrbot_update_enabled" in ast.get_source_segment(source, check_command)
+    assert "astrbot_update_enabled" in ast.get_source_segment(source, update_command)
+
     calls = [
         (node.lineno, node.value.func.attr)
-        for node in ast.walk(update_command)
+        for node in ast.walk(update_helper)
         if isinstance(node, ast.Await)
         and isinstance(node.value, ast.Call)
         and isinstance(node.value.func, ast.Attribute)
@@ -168,3 +204,10 @@ def test_astrbot_update_commands_check_before_starting_update():
             "start_astrbot_update",
         ),
     ]
+
+    schema = json.loads(Path("_conf_schema.json").read_text(encoding="utf-8"))
+    assert schema["astrbot_update_enabled"]["default"] is True
+    assert schema["astrbot_auto_update"]["default"] is False
+    assert schema["astrbot_auto_update"]["condition"] == {
+        "astrbot_update_enabled": True
+    }

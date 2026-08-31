@@ -93,6 +93,8 @@ class PluginUpdateManager(Star):
         self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
         self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
         self.restart_mode = self.config.get("restart_mode", False)
+        self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
+        self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
         self.custom_plugin_sources = list(
             self.config.get("custom_plugin_sources", []) or []
         )
@@ -368,7 +370,27 @@ class PluginUpdateManager(Star):
 
         logger.info("定时任务：正在检查并更新插件...")
         final_message, need_to_restart = await self._check_and_perform_updates()
-        await self.send_message_to_admin([Comp.Plain(text=final_message)])
+        messages = [final_message]
+
+        if self.astrbot_update_enabled and self.astrbot_auto_update:
+            try:
+                async with self._update_lock:
+                    astrbot_message, astrbot_need_restart, astrbot_changelog = (
+                        await self._perform_astrbot_update()
+                    )
+            except Exception as exc:
+                logger.error(f"定时更新 AstrBot 框架失败：{traceback.format_exc()}")
+                astrbot_message = f"AstrBot 定时更新失败：{exc}"
+                astrbot_need_restart = False
+                astrbot_changelog = ""
+            messages.append(astrbot_message)
+            need_to_restart = need_to_restart or astrbot_need_restart
+        else:
+            astrbot_changelog = ""
+
+        await self.send_message_to_admin([Comp.Plain(text="\n\n".join(messages))])
+        if astrbot_changelog:
+            await self.send_message_to_admin([Comp.Plain(text=astrbot_changelog)])
         if need_to_restart:
             await self.restart_command()
 
@@ -398,6 +420,61 @@ class PluginUpdateManager(Star):
             self.dashboard = DashboardClient(self.context)
         await self.dashboard.initialize()
         return self.dashboard
+
+    async def _perform_astrbot_update(self) -> tuple[str, bool, str]:
+        """检查并执行 AstrBot 框架更新。
+
+        调用方必须持有 ``_update_lock``，以避免与插件安装、更新或数据清理并发。
+        """
+        dashboard = await self._get_dashboard_client()
+        update_info = await dashboard.check_astrbot_update()
+        current_version = str(update_info.get("version") or "未知版本")
+        if not update_info.get("has_new_version"):
+            return f"AstrBot 当前为 {current_version}，已经是最新版本。", False, ""
+
+        release = None
+        if self.admin_sid_list:
+            try:
+                release = await dashboard.get_astrbot_latest_release()
+            except Exception as exc:
+                logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
+
+        logger.info("发现 AstrBot 可用更新，正在启动更新任务。")
+        progress_id = await dashboard.start_astrbot_update(
+            proxy=self.proxy_address,
+            reboot=False,
+        )
+        last_message = ""
+        for _ in range(600):
+            progress = await dashboard.get_astrbot_update_progress(progress_id)
+            status = str(progress.get("status") or "")
+            message = str(progress.get("message") or "")
+            if message and message != last_message:
+                last_message = message
+                logger.info(f"AstrBot 更新：{message}")
+            if status == "success":
+                changelog = ""
+                if release:
+                    notes = release["notes"] or "本次发布未提供更新日志。"
+                    changelog = truncate_text(
+                        f"AstrBot {release['version']} 更新日志：\n\n{notes}",
+                        MAX_TOTAL_CHANGELOG_CHARS,
+                    )
+                return "AstrBot 更新完成。", True, changelog
+            if status == "error":
+                return (
+                    f"AstrBot 更新失败：{message or '请查看 AstrBot 服务端日志。'}",
+                    False,
+                    "",
+                )
+            await asyncio.sleep(1)
+
+        return (
+            "AstrBot 更新仍在后台执行，超过等待时间后未自动重启；"
+            "请在 Dashboard 查看更新进度。",
+            False,
+            "",
+        )
 
     async def _check_and_perform_updates(self) -> tuple[str, bool]:
         if self._update_lock.locked():
@@ -560,6 +637,9 @@ class PluginUpdateManager(Star):
     async def check_astrbot_update_command(self, event: AstrMessageEvent):
         """检查 AstrBot 框架是否有可用更新。"""
         logger.info("收到用户命令 '检查astrbot更新'。")
+        if not self.astrbot_update_enabled:
+            yield event.plain_result("AstrBot 框架更新功能已在插件配置中关闭。")
+            return
         if self._update_lock.locked():
             yield event.plain_result("已有更新任务正在执行，请稍后再试。")
             return
@@ -594,6 +674,9 @@ class PluginUpdateManager(Star):
     async def update_astrbot_command(self, event: AstrMessageEvent):
         """通过 AstrBot Dashboard 更新框架、依赖并在成功后重启。"""
         logger.info("收到用户命令 '更新astrbot'。")
+        if not self.astrbot_update_enabled:
+            yield event.plain_result("AstrBot 框架更新功能已在插件配置中关闭。")
+            return
         if self._update_lock.locked():
             yield event.plain_result("已有更新任务正在执行，请稍后再试。")
             return
@@ -601,56 +684,27 @@ class PluginUpdateManager(Star):
         yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
         async with self._update_lock:
             try:
-                dashboard = await self._get_dashboard_client()
-                update_info = await dashboard.check_astrbot_update()
-                current_version = str(update_info.get("version") or "未知版本")
-                if not update_info.get("has_new_version"):
-                    yield event.plain_result(
-                        f"AstrBot 当前为 {current_version}，已经是最新版本。"
-                    )
-                    return
-
-                yield event.plain_result(
-                    "发现可用更新，正在下载并更新 AstrBot 框架、WebUI 和依赖；"
-                    "完成后将自动重启，请稍候..."
+                result_message, need_to_restart, changelog = (
+                    await self._perform_astrbot_update()
                 )
-                progress_id = await dashboard.start_astrbot_update(
-                    proxy=self.proxy_address,
-                    reboot=False,
-                )
-                last_message = ""
-                for _ in range(600):
-                    progress = await dashboard.get_astrbot_update_progress(progress_id)
-                    status = str(progress.get("status") or "")
-                    message = str(progress.get("message") or "")
-                    if message and message != last_message:
-                        last_message = message
-                        yield event.plain_result(f"AstrBot 更新：{message}")
-                    if status == "success":
-                        await self._save_pending_restart(event.unified_msg_origin)
-                        error_message = await self.restart_command(notify_admin=False)
-                        if error_message:
-                            self._clear_pending_restart()
-                            yield event.plain_result(error_message)
-                        else:
-                            yield event.plain_result(
-                                "AstrBot 更新完成，正在重启；启动完成后将发送回告。"
-                            )
-                        return
-                    if status == "error":
-                        yield event.plain_result(
-                            f"AstrBot 更新失败：{message or '请查看 AstrBot 服务端日志。'}"
-                        )
-                        return
-                    await asyncio.sleep(1)
             except Exception as exc:
                 logger.error(f"更新 AstrBot 框架失败：{traceback.format_exc()}")
                 yield event.plain_result(f"更新 AstrBot 框架失败：{exc}")
                 return
 
-        yield event.plain_result(
-            "AstrBot 更新仍在后台执行，超过等待时间后未自动重启；请在 Dashboard 查看更新进度。"
-        )
+        if not need_to_restart:
+            yield event.plain_result(result_message)
+            return
+
+        if changelog:
+            await self.send_message_to_admin([Comp.Plain(text=changelog)])
+        await self._save_pending_restart(event.unified_msg_origin)
+        error_message = await self.restart_command(notify_admin=False)
+        if error_message:
+            self._clear_pending_restart()
+            yield event.plain_result(error_message)
+            return
+        yield event.plain_result("AstrBot 更新完成，正在重启；启动完成后将发送回告。")
 
     async def _fetch_online_plugins(
         self, session: aiohttp.ClientSession

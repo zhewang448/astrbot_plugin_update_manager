@@ -31,6 +31,9 @@ class DashboardClient:
         self.restart_url = f"http://{self.host}:{self.port}/api/stat/restart-core"
         self.core_update_check_url = f"http://{self.host}:{self.port}/api/update/check"
         self.core_update_url = f"http://{self.host}:{self.port}/api/update/do"
+        self.core_update_releases_url = (
+            f"http://{self.host}:{self.port}/api/update/releases"
+        )
         self.core_update_progress_url = (
             f"http://{self.host}:{self.port}/api/update/progress"
         )
@@ -73,6 +76,21 @@ class DashboardClient:
         if not isinstance(progress_id, str) or not progress_id:
             raise RuntimeError("Dashboard 未返回框架更新任务 ID")
         return progress_id
+
+    async def get_astrbot_latest_release(self) -> dict[str, str] | None:
+        """返回 AstrBot 当前可获取的最新发布信息。"""
+        body = await self._request("GET", self.core_update_releases_url)
+        data = body.get("data")
+        if not isinstance(data, list) or not data:
+            return None
+        release = data[0]
+        if not isinstance(release, dict):
+            return None
+        version = str(release.get("tag_name") or "").strip()
+        notes = str(release.get("body") or "").strip()
+        if not version:
+            return None
+        return {"version": version, "notes": notes}
 
     async def get_astrbot_update_progress(self, progress_id: str) -> dict[str, Any]:
         """查询指定 AstrBot 框架更新任务的进度。"""

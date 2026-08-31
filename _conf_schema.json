@@ -151,6 +151,21 @@
     "type": "bool",
     "default": false
   },
+  "astrbot_update_enabled": {
+    "description": "启用 AstrBot 框架更新功能",
+    "type": "bool",
+    "hint": "关闭后，检查astrbot更新、更新astrbot 和 AstrBot 定时更新均不会执行；重启astrbot 不受影响",
+    "default": true
+  },
+  "astrbot_auto_update": {
+    "description": "定时更新 AstrBot 框架",
+    "type": "bool",
+    "hint": "复用上方的定时检查方式、间隔或星期时间；发现新版本后自动更新并重启，更新日志会发送到管理员 SID 列表",
+    "default": false,
+    "condition": {
+      "astrbot_update_enabled": true
+    }
+  },
   "send_changelog_to_admin": {
     "description": "更新成功后发送更新日志",
     "type": "bool",

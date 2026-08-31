@@ -72,7 +72,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.6.1",
+    "2.7.0",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -381,11 +381,9 @@ class PluginUpdateManager(Star):
 
     async def restart_command(self, notify_admin: bool = True) -> str | None:
         try:
-            if not self.dashboard:
-                self.dashboard = DashboardClient(self.context)
-                await self.dashboard.initialize()
+            dashboard = await self._get_dashboard_client()
             logger.info("准备执行重启...")
-            await self.dashboard.restart()
+            await dashboard.restart()
             return None
         except Exception as exc:
             error_message = f"尝试重启失败：{exc}"
@@ -393,6 +391,13 @@ class PluginUpdateManager(Star):
             if notify_admin:
                 await self.send_message_to_admin([Comp.Plain(text=error_message)])
             return error_message
+
+    async def _get_dashboard_client(self) -> DashboardClient:
+        """返回已连接的本地 Dashboard 客户端。"""
+        if not self.dashboard:
+            self.dashboard = DashboardClient(self.context)
+        await self.dashboard.initialize()
+        return self.dashboard
 
     async def _check_and_perform_updates(self) -> tuple[str, bool]:
         if self._update_lock.locked():
@@ -543,6 +548,90 @@ class PluginUpdateManager(Star):
         yield event.plain_result(result_message).use_t2i(False)
         if need_to_restart:
             await self.restart_command()
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("检查AstrBot更新", alias={"checkastrbotupdates"})
+    async def check_astrbot_update_command(self, event: AstrMessageEvent):
+        """检查 AstrBot 框架是否有可用更新。"""
+        logger.info("收到用户命令 '检查AstrBot更新'。")
+        if self._update_lock.locked():
+            yield event.plain_result("已有更新任务正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
+        async with self._update_lock:
+            try:
+                dashboard = await self._get_dashboard_client()
+                update_info = await dashboard.check_astrbot_update()
+            except Exception as exc:
+                logger.error(f"检查 AstrBot 框架更新失败：{traceback.format_exc()}")
+                yield event.plain_result(f"检查 AstrBot 框架更新失败：{exc}")
+                return
+
+        current_version = str(update_info.get("version") or "未知版本")
+        if not update_info.get("has_new_version"):
+            yield event.plain_result(f"AstrBot 当前为 {current_version}，已经是最新版本。")
+            return
+
+        message = str(update_info.get("message") or "")
+        lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
+        if message:
+            lines.append(message)
+        lines.append("发送“更新AstrBot”即可下载、更新依赖并重启。")
+        yield event.plain_result("\n".join(lines)).use_t2i(False)
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("更新AstrBot", alias={"updateastrbot"})
+    async def update_astrbot_command(self, event: AstrMessageEvent):
+        """通过 AstrBot Dashboard 更新框架、依赖并在成功后重启。"""
+        logger.info("收到用户命令 '更新AstrBot'。")
+        if self._update_lock.locked():
+            yield event.plain_result("已有更新任务正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result(
+            "正在下载并更新 AstrBot 框架、WebUI 和依赖；完成后将自动重启，请稍候..."
+        )
+        async with self._update_lock:
+            try:
+                dashboard = await self._get_dashboard_client()
+                progress_id = await dashboard.start_astrbot_update(
+                    proxy=self.proxy_address,
+                    reboot=False,
+                )
+                last_message = ""
+                for _ in range(600):
+                    progress = await dashboard.get_astrbot_update_progress(progress_id)
+                    status = str(progress.get("status") or "")
+                    message = str(progress.get("message") or "")
+                    if message and message != last_message:
+                        last_message = message
+                        yield event.plain_result(f"AstrBot 更新：{message}")
+                    if status == "success":
+                        await self._save_pending_restart(event.unified_msg_origin)
+                        error_message = await self.restart_command(notify_admin=False)
+                        if error_message:
+                            self._clear_pending_restart()
+                            yield event.plain_result(error_message)
+                        else:
+                            yield event.plain_result(
+                                "AstrBot 更新完成，正在重启；启动完成后将发送回告。"
+                            )
+                        return
+                    if status == "error":
+                        yield event.plain_result(
+                            f"AstrBot 更新失败：{message or '请查看 AstrBot 服务端日志。'}"
+                        )
+                        return
+                    await asyncio.sleep(1)
+            except Exception as exc:
+                logger.error(f"更新 AstrBot 框架失败：{traceback.format_exc()}")
+                yield event.plain_result(f"更新 AstrBot 框架失败：{exc}")
+                return
+
+        yield event.plain_result(
+            "AstrBot 更新仍在后台执行，超过等待时间后未自动重启；请在 Dashboard 查看更新进度。"
+        )
 
     async def _fetch_online_plugins(
         self, session: aiohttp.ClientSession

@@ -1,0 +1,115 @@
+import logging
+import sys
+import types
+
+import pytest
+
+
+astrbot_module = types.ModuleType("astrbot")
+astrbot_api_module = types.ModuleType("astrbot.api")
+astrbot_api_module.logger = logging.getLogger("astrbot-test")
+astrbot_core_module = types.ModuleType("astrbot.core")
+astrbot_star_module = types.ModuleType("astrbot.core.star")
+astrbot_context_module = types.ModuleType("astrbot.core.star.context")
+astrbot_context_module.Context = object
+sys.modules.setdefault("astrbot", astrbot_module)
+sys.modules.setdefault("astrbot.api", astrbot_api_module)
+sys.modules.setdefault("astrbot.core", astrbot_core_module)
+sys.modules.setdefault("astrbot.core.star", astrbot_star_module)
+sys.modules.setdefault("astrbot.core.star.context", astrbot_context_module)
+
+from dashboard_client import DashboardClient  # noqa: E402
+
+
+class FakeResponse:
+    def __init__(self, body):
+        self.status = 200
+        self._body = body
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return False
+
+    async def json(self, **_kwargs):
+        return self._body
+
+
+class FakeSession:
+    closed = False
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.calls = []
+
+    def request(self, method, url, **kwargs):
+        self.calls.append((method, url, kwargs))
+        return FakeResponse(self.responses.pop(0))
+
+
+def build_client(responses):
+    client = object.__new__(DashboardClient)
+    client._session = FakeSession(responses)
+    client.core_update_check_url = "http://localhost/api/update/check"
+    client.core_update_url = "http://localhost/api/update/do"
+    client.core_update_progress_url = "http://localhost/api/update/progress"
+    client._generate_jwt = lambda: "test-token"
+    return client
+
+
+@pytest.mark.asyncio
+async def test_framework_update_uses_dashboard_progress_endpoints():
+    client = build_client(
+        [
+            {
+                "status": "success",
+                "message": "ReleaseInfo(version='v4.28.0')",
+                "data": {"version": "v4.27.4", "has_new_version": True},
+            },
+            {"status": "ok", "data": {"id": "progress-1"}},
+            {
+                "status": "ok",
+                "data": {"id": "progress-1", "status": "success"},
+            },
+        ]
+    )
+
+    check = await client.check_astrbot_update()
+    progress_id = await client.start_astrbot_update(
+        proxy="https://proxy.example", reboot=False
+    )
+    progress = await client.get_astrbot_update_progress(progress_id)
+
+    assert check["has_new_version"] is True
+    assert check["message"] == "ReleaseInfo(version='v4.28.0')"
+    assert progress_id == "progress-1"
+    assert progress["status"] == "success"
+    assert client._session.calls == [
+        (
+            "GET",
+            "http://localhost/api/update/check",
+            {"headers": {"Authorization": "Bearer test-token"}, "json": None},
+        ),
+        (
+            "POST",
+            "http://localhost/api/update/do",
+            {
+                "headers": {"Authorization": "Bearer test-token"},
+                "json": {
+                    "version": "latest",
+                    "proxy": "https://proxy.example",
+                    "reboot": False,
+                },
+            },
+        ),
+        (
+            "GET",
+            "http://localhost/api/update/progress",
+            {
+                "headers": {"Authorization": "Bearer test-token"},
+                "json": None,
+                "params": {"id": "progress-1"},
+            },
+        ),
+    ]

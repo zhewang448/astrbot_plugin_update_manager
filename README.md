@@ -1,4 +1,4 @@
-# AstrBot 插件更新管理器 v2.7.0
+# AstrBot 插件更新管理器 v2.7.1
 
 用于批量检查并更新已安装的 AstrBot 插件与 AstrBot 框架，支持手动更新、灵活定时检查、管理员通知和更新后自动重启。
 
@@ -41,26 +41,26 @@
 
 | 指令 | 别名 | 功能 | 权限 |
 | --- | --- | --- | --- |
-| `更新所有插件` | `updateallplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
-| `检查插件更新` | `checkpluginupdates` | 只检查可用更新，不执行更新 | 管理员 |
-| `检查AstrBot更新` | `checkastrbotupdates` | 检查 AstrBot 框架是否有可用更新 | 管理员 |
-| `更新AstrBot` | `updateastrbot` | 更新 AstrBot 核心、WebUI 和依赖，成功后重启 | 管理员 |
-| `安装插件 <链接>` | `installplugin` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
-| `清除插件数据 <插件名> --confirm` | `clearplugindata` | 清除插件持久化文件和 KV 数据并重载插件，不删除用户配置 | 管理员 |
-| `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
-| `重新安装插件<仓库链接> [--no-proxy]` | `reinstallplugin` | 从仓库 metadata.name 定位插件并覆盖重装 | 管理员 |
-| `重启astrbot` | 无 | 调用 Dashboard 接口重启 AstrBot | 管理员 |
+| `更新所有插件` | `updateallplugins`、`updateplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
+| `检查插件更新` | `checkpluginupdates`、`checkplugins` | 只检查可用更新，不执行更新 | 管理员 |
+| `检查astrbot更新` | `checkastrbotupdates`、`checkastrbot`、`检查AstrBot更新` | 检查 AstrBot 框架是否有可用更新 | 管理员 |
+| `更新astrbot` | `updateastrbot`、`astrbotupdate`、`更新AstrBot` | 更新 AstrBot 核心、WebUI 和依赖，成功后重启 | 管理员 |
+| `安装插件 <链接>` | `installplugin`、`plugininstall` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
+| `清除插件数据 <插件名> --confirm` | `clearplugindata`、`clearplugin` | 清除插件持久化文件和 KV 数据并重载插件，不删除用户配置 | 管理员 |
+| `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin`、`reinstall` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
+| `重新安装插件<仓库链接> [--no-proxy]` | `reinstallplugin`、`reinstall` | 从仓库 metadata.name 定位插件并覆盖重装 | 管理员 |
+| `重启astrbot` | `restartastrbot`、`astrbotrestart` | 调用 Dashboard 接口重启 AstrBot | 管理员 |
 
 ### 更新 AstrBot 框架
 
 ```
-检查AstrBot更新
-更新AstrBot
+检查astrbot更新
+更新astrbot
 ```
 
 框架更新复用本机 AstrBot Dashboard 的原生更新服务：先下载并校验 WebUI 与核心包，再更新 `requirements.txt` 依赖。插件持续查询该服务的进度；任务成功后才发起重启，并在框架再次启动后向原会话发送完成回告。
 
-`更新所有插件` 保持只更新插件，不会隐式更新 AstrBot 框架。框架更新不支持的启动模式或 Desktop 托管后端会直接返回 AstrBot 原生的状态说明。
+`更新astrbot` 会先检查可用更新；当前版本已是最新时直接返回结果，不会启动更新任务。`更新所有插件` 保持只更新插件，不会隐式更新 AstrBot 框架。框架更新不支持的启动模式或 Desktop 托管后端会直接返回 AstrBot 原生的状态说明。
 
 ### 安装插件
 
@@ -222,7 +222,7 @@ Token 仅用于 GitHub API 请求认证，不会显示在运行日志中。请�
 - 插件市场不可访问时会明确提示；已成功检查到的自定义源更新仍可继续执行。
 - 插件版本无法比较、市场不存在或匹配有歧义时，会跳过该插件并在结果中说明。
 - 重启功能通过 AstrBot 本地 Dashboard 接口完成，不需要安装其他重启插件。
-- 框架更新由 AstrBot 原生更新器执行；`更新AstrBot` 会等待任务成功后再重启，等待超时则保留任务运行状态，不会强制重启。
+- 框架更新由 AstrBot 原生更新器执行；`更新astrbot` 会等待任务成功后再重启，等待超时则保留任务运行状态，不会强制重启。
 
 ## 致谢
 

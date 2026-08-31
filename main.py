@@ -72,7 +72,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.7.0",
+    "2.7.1",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -536,7 +536,10 @@ class PluginUpdateManager(Star):
         return "\n".join(lines)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("更新所有插件", alias={"updateallplugins", "更新全部插件"})
+    @filter.command(
+        "更新所有插件",
+        alias={"updateallplugins", "updateplugins", "更新全部插件"},
+    )
     async def update_all_plugins_command(self, event: AstrMessageEvent):
         logger.info("收到用户命令 '更新所有插件'。")
         if self._update_lock.locked():
@@ -550,10 +553,13 @@ class PluginUpdateManager(Star):
             await self.restart_command()
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("检查AstrBot更新", alias={"checkastrbotupdates"})
+    @filter.command(
+        "检查astrbot更新",
+        alias={"checkastrbotupdates", "checkastrbot", "检查AstrBot更新"},
+    )
     async def check_astrbot_update_command(self, event: AstrMessageEvent):
         """检查 AstrBot 框架是否有可用更新。"""
-        logger.info("收到用户命令 '检查AstrBot更新'。")
+        logger.info("收到用户命令 '检查astrbot更新'。")
         if self._update_lock.locked():
             yield event.plain_result("已有更新任务正在执行，请稍后再试。")
             return
@@ -577,24 +583,37 @@ class PluginUpdateManager(Star):
         lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
         if message:
             lines.append(message)
-        lines.append("发送“更新AstrBot”即可下载、更新依赖并重启。")
+        lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
         yield event.plain_result("\n".join(lines)).use_t2i(False)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("更新AstrBot", alias={"updateastrbot"})
+    @filter.command(
+        "更新astrbot",
+        alias={"updateastrbot", "astrbotupdate", "更新AstrBot"},
+    )
     async def update_astrbot_command(self, event: AstrMessageEvent):
         """通过 AstrBot Dashboard 更新框架、依赖并在成功后重启。"""
-        logger.info("收到用户命令 '更新AstrBot'。")
+        logger.info("收到用户命令 '更新astrbot'。")
         if self._update_lock.locked():
             yield event.plain_result("已有更新任务正在执行，请稍后再试。")
             return
 
-        yield event.plain_result(
-            "正在下载并更新 AstrBot 框架、WebUI 和依赖；完成后将自动重启，请稍候..."
-        )
+        yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
         async with self._update_lock:
             try:
                 dashboard = await self._get_dashboard_client()
+                update_info = await dashboard.check_astrbot_update()
+                current_version = str(update_info.get("version") or "未知版本")
+                if not update_info.get("has_new_version"):
+                    yield event.plain_result(
+                        f"AstrBot 当前为 {current_version}，已经是最新版本。"
+                    )
+                    return
+
+                yield event.plain_result(
+                    "发现可用更新，正在下载并更新 AstrBot 框架、WebUI 和依赖；"
+                    "完成后将自动重启，请稍候..."
+                )
                 progress_id = await dashboard.start_astrbot_update(
                     proxy=self.proxy_address,
                     reboot=False,
@@ -763,7 +782,7 @@ class PluginUpdateManager(Star):
         }
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("重启astrbot")
+    @filter.command("重启astrbot", alias={"restartastrbot", "astrbotrestart"})
     async def restart_astrbot_command(self, event: AstrMessageEvent):
         logger.info("收到用户命令 '重启astrbot'。")
         yield event.plain_result("正在重启，请稍候...")
@@ -1052,7 +1071,7 @@ class PluginUpdateManager(Star):
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("检查插件更新", alias={"checkpluginupdates"})
+    @filter.command("检查插件更新", alias={"checkpluginupdates", "checkplugins"})
     async def check_plugins_command(self, event: AstrMessageEvent):
         """只检查有无可用更新，不执行更新操作。"""
         logger.info("收到用户命令 '检查插件更新'。")
@@ -1095,7 +1114,7 @@ class PluginUpdateManager(Star):
         yield event.plain_result("\n".join(lines)).use_t2i(False)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("安装插件", alias={"installplugin"})
+    @filter.command("安装插件", alias={"installplugin", "plugininstall"})
     async def install_plugin_command(self, event: AstrMessageEvent):
         """通过 AstrBot 原生插件管理器安装指定仓库。"""
         parts = str(getattr(event, "message_str", "") or "").strip().split(
@@ -1147,7 +1166,7 @@ class PluginUpdateManager(Star):
                 yield event.plain_result(f"插件安装失败：{exc}")
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("清除插件数据", alias={"clearplugindata"})
+    @filter.command("清除插件数据", alias={"clearplugindata", "clearplugin"})
     async def clear_plugin_data_command(self, event: AstrMessageEvent):
         """清除指定插件的 AstrBot 持久化数据，并重新加载插件。"""
         parts = str(getattr(event, "message_str", "") or "").strip().split(
@@ -1278,7 +1297,7 @@ class PluginUpdateManager(Star):
                 )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("重新安装插件", alias={"reinstallplugin"})
+    @filter.command("重新安装插件", alias={"reinstallplugin", "reinstall"})
     async def reinstall_plugin_command(self, event: AstrMessageEvent):
         """强制重新下载并安装指定插件，不进行版本比较。"""
         message_text = str(getattr(event, "message_str", "") or "").strip()

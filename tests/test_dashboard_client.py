@@ -1,6 +1,8 @@
+import ast
 import logging
 import sys
 import types
+from pathlib import Path
 
 import pytest
 
@@ -111,5 +113,58 @@ async def test_framework_update_uses_dashboard_progress_endpoints():
                 "json": None,
                 "params": {"id": "progress-1"},
             },
+        ),
+    ]
+
+
+def test_astrbot_update_commands_check_before_starting_update():
+    module = ast.parse(Path("main.py").read_text(encoding="utf-8"))
+    functions = {
+        node.name: node
+        for node in ast.walk(module)
+        if isinstance(node, ast.AsyncFunctionDef)
+    }
+
+    check_command = functions["check_astrbot_update_command"]
+    update_command = functions["update_astrbot_command"]
+    command_names = {}
+    for function in (check_command, update_command):
+        decorator = next(
+            decorator
+            for decorator in function.decorator_list
+            if isinstance(decorator, ast.Call)
+            and isinstance(decorator.func, ast.Attribute)
+            and decorator.func.attr == "command"
+        )
+        command_names[function.name] = (
+            ast.literal_eval(decorator.args[0]),
+            ast.literal_eval(next(keyword.value for keyword in decorator.keywords)),
+        )
+
+    assert command_names["check_astrbot_update_command"] == (
+        "检查astrbot更新",
+        {"checkastrbotupdates", "checkastrbot", "检查AstrBot更新"},
+    )
+    assert command_names["update_astrbot_command"] == (
+        "更新astrbot",
+        {"updateastrbot", "astrbotupdate", "更新AstrBot"},
+    )
+
+    calls = [
+        (node.lineno, node.value.func.attr)
+        for node in ast.walk(update_command)
+        if isinstance(node, ast.Await)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Attribute)
+        and node.value.func.attr in {"check_astrbot_update", "start_astrbot_update"}
+    ]
+    assert calls == [
+        (
+            min(line for line, name in calls if name == "check_astrbot_update"),
+            "check_astrbot_update",
+        ),
+        (
+            min(line for line, name in calls if name == "start_astrbot_update"),
+            "start_astrbot_update",
         ),
     ]

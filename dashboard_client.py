@@ -29,6 +29,14 @@ class DashboardClient:
             self.host = "127.0.0.1"
 
         self.restart_url = f"http://{self.host}:{self.port}/api/stat/restart-core"
+        self.core_update_check_url = f"http://{self.host}:{self.port}/api/update/check"
+        self.core_update_url = f"http://{self.host}:{self.port}/api/update/do"
+        self.core_update_releases_url = (
+            f"http://{self.host}:{self.port}/api/update/releases"
+        )
+        self.core_update_progress_url = (
+            f"http://{self.host}:{self.port}/api/update/progress"
+        )
         self._session: aiohttp.ClientSession | None = None
 
     async def initialize(self):
@@ -46,6 +54,54 @@ class DashboardClient:
         """重启 AstrBot 核心。"""
         await self._request("POST", self.restart_url)
 
+    async def check_astrbot_update(self) -> dict[str, Any]:
+        """检查 AstrBot 框架是否有可用更新。"""
+        body = await self._request("GET", self.core_update_check_url)
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("Dashboard 返回了无效的框架更新检查结果")
+        return {**data, "message": str(body.get("message") or "")}
+
+    async def start_astrbot_update(
+        self, *, proxy: str = "", reboot: bool = False
+    ) -> str:
+        """启动 AstrBot 框架更新并返回 Dashboard 进度任务 ID。"""
+        body = await self._request(
+            "POST",
+            self.core_update_url,
+            json={"version": "latest", "proxy": proxy or None, "reboot": reboot},
+        )
+        data = body.get("data")
+        progress_id = data.get("id") if isinstance(data, dict) else None
+        if not isinstance(progress_id, str) or not progress_id:
+            raise RuntimeError("Dashboard 未返回框架更新任务 ID")
+        return progress_id
+
+    async def get_astrbot_latest_release(self) -> dict[str, str] | None:
+        """返回 AstrBot 当前可获取的最新发布信息。"""
+        body = await self._request("GET", self.core_update_releases_url)
+        data = body.get("data")
+        if not isinstance(data, list) or not data:
+            return None
+        release = data[0]
+        if not isinstance(release, dict):
+            return None
+        version = str(release.get("tag_name") or "").strip()
+        notes = str(release.get("body") or "").strip()
+        if not version:
+            return None
+        return {"version": version, "notes": notes}
+
+    async def get_astrbot_update_progress(self, progress_id: str) -> dict[str, Any]:
+        """查询指定 AstrBot 框架更新任务的进度。"""
+        body = await self._request(
+            "GET", self.core_update_progress_url, params={"id": progress_id}
+        )
+        data = body.get("data")
+        if not isinstance(data, dict):
+            raise RuntimeError("Dashboard 返回了无效的框架更新进度")
+        return data
+
     async def _request(
         self,
         method: str,
@@ -53,7 +109,7 @@ class DashboardClient:
         *,
         json: dict[str, Any] | None = None,
         **kwargs,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         """统一发送带本地 Dashboard 鉴权的请求。"""
         if self._session is None or self._session.closed:
             await self.initialize()
@@ -68,11 +124,11 @@ class DashboardClient:
             body = await resp.json(content_type=None)
             if not isinstance(body, dict):
                 raise RuntimeError("Dashboard 返回了未知数据格式")
-            if body.get("status") != "ok":
+            if body.get("status") not in {"ok", "success"}:
                 raise RuntimeError(
                     f"业务错误: {body.get('message') or body.get('msg')}"
                 )
-            return body.get("data")
+            return body
 
     def _generate_jwt(self) -> str:
         """使用 AstrBot 本地配置生成 Dashboard JWT。"""

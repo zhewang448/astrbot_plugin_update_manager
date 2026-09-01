@@ -1,5 +1,17 @@
 # 更新日志
 
+## v2.7.0
+
+- 新增 `检查astrbot更新`（`checkastrbotupdates`）和 `更新astrbot`（`updateastrbot`）管理员指令。
+- 框架更新复用本地 Dashboard 的原生更新服务，涵盖 AstrBot 核心、WebUI 和依赖更新；只有任务成功后才触发重启并向原会话回告。
+- `更新所有插件` 仍只处理插件更新，避免将框架更新混入既有自动更新流程。
+- 修复 `更新astrbot` 在当前已是最新版本时仍启动更新任务的问题；现在先检查更新状态。
+- 命令主名称中的 `astrbot` 统一为小写，并增加常用小写英文别名及原大小写写法的兼容别名。
+- 新增 `astrbot_update_enabled` 总开关和 `astrbot_auto_update` 定时更新开关；框架更新拥有独立调度设置。
+- AstrBot 框架更新成功后向 `admin_sid_list` 发送对应发布版本的更新日志。
+- 现有定时字段均明确标注为插件更新用途，并保留原字段名和值，避免升级时丢失既有配置。
+- 新增 `astrbot_send_changelog_to_admin` 配置项，可单独控制框架更新日志通知，默认开启。
+
 ## v2.6.1
 
 - 修复手动执行 `重启astrbot` 后，AstrBot 重启完成不会通知原会话的问题。

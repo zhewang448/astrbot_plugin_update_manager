@@ -1,7 +1,7 @@
 name: astrbot_plugin_update_manager
 display_name: 插件更新管理器
-desc: "批量检查并更新已安装的 AstrBot 插件，支持插件市场与自定义 GitHub 更新源、灵活定时、黑白名单、管理员通知和更新后自动重启。"
-help: "管理员发送 更新所有插件 执行检查和更新；发送 检查插件更新 只查看可用更新；发送 安装插件 <链接> 调用 AstrBot 原生接口安装；发送 清除插件数据 <插件名> --confirm 清理非配置持久化数据并重载；发送 重新安装插件 <插件名> [GitHub地址] [--no-proxy] 强制重装，也支持重新安装插件<仓库链接>；发送 重启astrbot 可手动重启 AstrBot。"
-version: v2.6.1
+desc: "批量检查并更新已安装的 AstrBot 插件与 AstrBot 框架，支持插件市场与自定义 GitHub 更新源、定时框架更新、黑白名单、管理员通知和更新后自动重启。"
+help: "管理员发送 更新所有插件 执行插件检查和更新；发送 检查插件更新 只查看插件更新；发送 检查astrbot更新 查看框架更新；发送 更新astrbot 更新框架、WebUI 和依赖后重启；框架更新完成后向管理员 SID 列表发送更新日志；发送 安装插件 <链接> 调用 AstrBot 原生接口安装；发送 清除插件数据 <插件名> --confirm 清理非配置持久化数据并重载；发送 重新安装插件 <插件名> [GitHub地址] [--no-proxy] 强制重装，也支持重新安装插件<仓库链接>；发送 重启astrbot 可手动重启 AstrBot。"
+version: v2.7.0
 author: bushikq
 repo: https://github.com/zhewang448/astrbot_plugin_update_manager

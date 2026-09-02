@@ -158,16 +158,25 @@
     "default": false
   },
   "astrbot_update_enabled": {
-    "description": "启用 AstrBot 框架更新功能",
+    "description": "AstrBot 框架：启用更新功能",
     "type": "bool",
     "hint": "关闭后，检查astrbot更新、更新astrbot 和 AstrBot 定时更新均不会执行；重启astrbot 不受影响",
     "default": true
   },
-  "astrbot_auto_update": {
-    "description": "定时更新 AstrBot 框架",
+  "astrbot_include_prerelease": {
+    "description": "AstrBot 框架：检查预发布版本",
     "type": "bool",
-    "hint": "启用独立的 AstrBot 框架定时更新；其时间配置与插件更新互不影响",
+    "hint": "开启后，检查和定时更新会将高于当前版本的预发布版本纳入候选，并按选定版本更新；默认仅检查正式版本",
     "default": false,
+    "condition": {
+      "astrbot_update_enabled": true
+    }
+  },
+  "astrbot_changelog_forward_threshold": {
+    "description": "AstrBot 框架：检查日志转发阈值（字）",
+    "type": "int",
+    "hint": "目标版本更新日志超过此字数时，检查astrbot更新会以合并转发回复，更新astrbot 成功后会以合并转发通知管理员；填 0 则所有非空更新日志均使用合并转发",
+    "default": 100,
     "condition": {
       "astrbot_update_enabled": true
     }
@@ -177,6 +186,15 @@
     "type": "bool",
     "hint": "更新成功后，将 AstrBot 发布版本的更新日志发送到管理员 SID 列表；关闭后不影响更新和重启",
     "default": true,
+    "condition": {
+      "astrbot_update_enabled": true
+    }
+  },
+  "astrbot_auto_update": {
+    "description": "AstrBot 框架：定时更新",
+    "type": "bool",
+    "hint": "启用独立的 AstrBot 框架定时更新；其时间配置与插件更新互不影响",
+    "default": false,
     "condition": {
       "astrbot_update_enabled": true
     }

@@ -55,6 +55,7 @@ MARKET_URLS = (
 PLUGIN_NAME = "astrbot_plugin_update_manager"
 MAX_CHANGELOG_CHARS_PER_PLUGIN = 2000
 MAX_TOTAL_CHANGELOG_CHARS = 6000
+MAX_STATUS_MESSAGE_CHARS = 3000
 
 
 @dataclass
@@ -471,7 +472,7 @@ class PluginUpdateManager(Star):
 
         await self.send_message_to_admin([Comp.Plain(text=result_message)])
         if changelog:
-            await self.send_message_to_admin([Comp.Plain(text=changelog)])
+            await self._send_astrbot_changelog(changelog)
         if need_to_restart:
             await self.restart_command()
 
@@ -481,6 +482,13 @@ class PluginUpdateManager(Star):
                 await self.context.send_message(admin, MessageChain(msg_components))
             except Exception as exc:
                 logger.error(f"定时任务：发送给管理员 {admin} 消息失败：{exc}")
+
+    async def _send_astrbot_changelog(self, changelog: str) -> None:
+        """按框架日志阈值向管理员发送更新说明。"""
+        if len(changelog) > self.astrbot_changelog_forward_threshold:
+            await self._try_send_changelog_forward([changelog])
+            return
+        await self.send_message_to_admin([Comp.Plain(text=changelog)])
 
     async def restart_command(self, notify_admin: bool = True) -> str | None:
         try:
@@ -522,9 +530,14 @@ class PluginUpdateManager(Star):
         if self.astrbot_send_changelog_to_admin and self.admin_sid_list:
             if release is None:
                 try:
-                    release = await dashboard.get_astrbot_latest_release()
+                    release = await dashboard.get_astrbot_update_release(
+                        current_version,
+                        include_prerelease=self.astrbot_include_prerelease,
+                    )
                 except Exception as exc:
                     logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
+            if release:
+                target_version = str(release.get("version") or target_version)
 
         logger.info("发现 AstrBot 可用更新，正在启动更新任务。")
         progress_id = await dashboard.start_astrbot_update(
@@ -665,7 +678,10 @@ class PluginUpdateManager(Star):
                         name=f"{PLUGIN_NAME}:send-changelogs",
                     )
 
-                return "\n\n".join(lines), need_to_restart
+                return (
+                    truncate_text("\n\n".join(lines), MAX_STATUS_MESSAGE_CHARS),
+                    need_to_restart,
+                )
             except Exception as exc:
                 logger.error(f"插件更新流程异常：{traceback.format_exc()}")
                 return f"插件更新流程异常终止：{exc}", False
@@ -774,9 +790,10 @@ class PluginUpdateManager(Star):
             lines.append(message)
         if release:
             notes = str(release.get("notes") or "").strip()
+            displayed_notes = truncate_text(notes, MAX_TOTAL_CHANGELOG_CHARS)
             lines.append(
                 f"{target_version or '目标版本'} 更新日志：\n\n"
-                f"{notes or '本次发布未提供更新日志。'}"
+                f"{displayed_notes or '本次发布未提供更新日志。'}"
             )
         lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
         result_text = "\n".join(lines)
@@ -833,7 +850,7 @@ class PluginUpdateManager(Star):
             return
 
         if changelog:
-            await self.send_message_to_admin([Comp.Plain(text=changelog)])
+            await self._send_astrbot_changelog(changelog)
         await self._save_pending_restart(event.unified_msg_origin)
         error_message = await self.restart_command(notify_admin=False)
         if error_message:
@@ -1301,7 +1318,9 @@ class PluginUpdateManager(Star):
             )
         if notes:
             lines.append(f"\n{notes}")
-        yield event.plain_result("\n".join(lines)).use_t2i(False)
+        yield event.plain_result(
+            truncate_text("\n".join(lines), MAX_STATUS_MESSAGE_CHARS)
+        ).use_t2i(False)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("安装插件", alias={"installplugin", "plugininstall"})

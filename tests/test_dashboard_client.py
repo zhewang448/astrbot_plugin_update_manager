@@ -297,8 +297,17 @@ def test_astrbot_update_commands_check_before_starting_update():
         "astrbot_update_enabled": True
     }
     check_command_source = ast.get_source_segment(source, check_command)
+    update_command_source = ast.get_source_segment(source, update_command)
+    update_helper_source = ast.get_source_segment(source, update_helper)
+    scheduled_update_source = ast.get_source_segment(
+        source, functions["_scheduled_astrbot_update"]
+    )
     assert "astrbot_changelog_forward_threshold" in check_command_source
     assert "event.chain_result" in check_command_source
+    assert "truncate_text(notes, MAX_TOTAL_CHANGELOG_CHARS)" in check_command_source
+    assert "_send_astrbot_changelog" in update_command_source
+    assert "_send_astrbot_changelog" in scheduled_update_source
+    assert "get_astrbot_update_release" in update_helper_source
     assert schema["astrbot_schedule_mode"]["default"] == "interval"
     assert schema["astrbot_interval_hours"]["default"] == 24
     assert schema["astrbot_check_weekdays"]["default"] == [

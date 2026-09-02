@@ -175,7 +175,7 @@
   "astrbot_changelog_forward_threshold": {
     "description": "AstrBot 框架：检查日志转发阈值（字）",
     "type": "int",
-    "hint": "执行检查astrbot更新时，目标版本更新日志超过此字数将以合并转发消息回复；填 0 则所有非空更新日志均使用合并转发",
+    "hint": "目标版本更新日志超过此字数时，检查astrbot更新会以合并转发回复，更新astrbot 成功后会以合并转发通知管理员；填 0 则所有非空更新日志均使用合并转发",
     "default": 100,
     "condition": {
       "astrbot_update_enabled": true

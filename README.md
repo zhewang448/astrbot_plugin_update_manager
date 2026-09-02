@@ -61,7 +61,7 @@
 
 框架更新复用本机 AstrBot Dashboard 的原生更新服务：先下载并校验 WebUI 与核心包，再更新 `requirements.txt` 依赖。插件持续查询该服务的进度；任务成功后才发起重启，并在框架再次启动后向原会话发送完成回告。`astrbot_send_changelog_to_admin` 开启时，更新成功会将对应 AstrBot 发布版本的更新日志发送到 `admin_sid_list`。
 
-`更新astrbot` 会先检查可用更新；当前版本已是最新时直接返回结果，不会启动更新任务。`astrbot_include_prerelease` 默认关闭，开启后会把高于当前版本的预发布版本纳入检查，并使用选中的版本标签更新。`检查astrbot更新` 的更新日志超过 `astrbot_changelog_forward_threshold`（默认 100 字）时，会以合并转发消息回复。`更新所有插件` 保持只更新插件，不会隐式更新 AstrBot 框架。关闭 `astrbot_update_enabled` 后，框架检查、手动更新与定时框架更新都会停止，但 `重启astrbot` 仍可使用。框架更新不支持的启动模式或 Desktop 托管后端会直接返回 AstrBot 原生的状态说明。
+`更新astrbot` 会先检查可用更新；当前版本已是最新时直接返回结果，不会启动更新任务。`astrbot_include_prerelease` 默认关闭，开启后会把高于当前版本的预发布版本纳入检查，并使用选中的版本标签更新。框架更新日志会限制在 6000 字内；超过 `astrbot_changelog_forward_threshold`（默认 100 字）时，`检查astrbot更新` 使用合并转发消息回复，`更新astrbot` 和定时框架更新则以合并转发通知管理员。`更新所有插件` 保持只更新插件，不会隐式更新 AstrBot 框架。关闭 `astrbot_update_enabled` 后，框架检查、手动更新与定时框架更新都会停止，但 `重启astrbot` 仍可使用。框架更新不支持的启动模式或 Desktop 托管后端会直接返回 AstrBot 原生的状态说明。
 
 ### 安装插件
 
@@ -181,7 +181,7 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 | `send_changelog_to_admin` | 插件更新：成功后读取本地 CHANGELOG，以合并转发发送给管理员 |
 | `astrbot_update_enabled` | AstrBot 框架：总开关，默认开启；不影响 `重启astrbot` |
 | `astrbot_include_prerelease` | AstrBot 框架：是否将预发布版本纳入检查和更新，默认关闭 |
-| `astrbot_changelog_forward_threshold` | AstrBot 框架：检查更新日志超过该字数时使用合并转发回复，默认 100；填 0 时所有非空日志均转发 |
+| `astrbot_changelog_forward_threshold` | AstrBot 框架：更新日志超过该字数时使用合并转发；检查命令回复及手动/定时更新的管理员通知均适用，默认 100；填 0 时所有非空日志均转发 |
 | `astrbot_send_changelog_to_admin` | AstrBot 框架：成功后是否向管理员发送发布更新日志，默认开启 |
 | `astrbot_auto_update` | AstrBot 框架：是否启用独立定时更新，默认关闭 |
 | `astrbot_schedule_mode` | AstrBot 框架：`interval` 为固定间隔，`calendar` 为指定星期和时间 |

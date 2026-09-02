@@ -3,7 +3,7 @@
 ## v2.7.1
 
 - 新增 `astrbot_include_prerelease` 配置项，默认关闭；开启后，AstrBot 框架检查和更新可选择更高的预发布版本。
-
+- `检查astrbot更新` 现在显示目标版本更新日志；日志过长时使用合并转发消息。\r\n- `更新astrbot` 及定时框架更新的管理员通知沿用日志转发阈值，并限制状态摘要长度，避免消息过长。\r\n
 ## v2.7.0
 
 - 新增 `检查astrbot更新`（`checkastrbotupdates`）和 `更新astrbot`（`updateastrbot`）管理员指令。

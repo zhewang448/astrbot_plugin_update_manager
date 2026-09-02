@@ -292,6 +292,13 @@ def test_astrbot_update_commands_check_before_starting_update():
     assert schema["astrbot_send_changelog_to_admin"]["condition"] == {
         "astrbot_update_enabled": True
     }
+    assert schema["astrbot_changelog_forward_threshold"]["default"] == 100
+    assert schema["astrbot_changelog_forward_threshold"]["condition"] == {
+        "astrbot_update_enabled": True
+    }
+    check_command_source = ast.get_source_segment(source, check_command)
+    assert "astrbot_changelog_forward_threshold" in check_command_source
+    assert "event.chain_result" in check_command_source
     assert schema["astrbot_schedule_mode"]["default"] == "interval"
     assert schema["astrbot_interval_hours"]["default"] == 24
     assert schema["astrbot_check_weekdays"]["default"] == [

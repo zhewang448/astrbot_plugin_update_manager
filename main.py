@@ -97,10 +97,17 @@ class PluginUpdateManager(Star):
         self.astrbot_include_prerelease = self.config.get(
             "astrbot_include_prerelease", False
         )
-        self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
         self.astrbot_send_changelog_to_admin = self.config.get(
             "astrbot_send_changelog_to_admin", True
         )
+        try:
+            self.astrbot_changelog_forward_threshold = max(
+                0,
+                int(self.config.get("astrbot_changelog_forward_threshold", 100)),
+            )
+        except (TypeError, ValueError):
+            self.astrbot_changelog_forward_threshold = 100
+        self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
         self.astrbot_schedule_mode = self.config.get(
             "astrbot_schedule_mode", "interval"
         )
@@ -772,7 +779,28 @@ class PluginUpdateManager(Star):
                 f"{notes or '本次发布未提供更新日志。'}"
             )
         lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
-        yield event.plain_result("\n".join(lines)).use_t2i(False)
+        result_text = "\n".join(lines)
+        if (
+            release
+            and len(str(release.get("notes") or ""))
+            > self.astrbot_changelog_forward_threshold
+        ):
+            NodeCls = getattr(Comp, "Node", None)
+            NodesCls = getattr(Comp, "Nodes", None)
+            if NodeCls and NodesCls:
+                try:
+                    nodes = [
+                        NodeCls(
+                            uin="0",
+                            name="AstrBot 更新日志",
+                            content=[Comp.Plain(text=result_text)],
+                        )
+                    ]
+                    yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)
+                    return
+                except Exception as exc:
+                    logger.warning(f"构造 AstrBot 更新日志合并转发失败，降级为文本：{exc}")
+        yield event.plain_result(result_text).use_t2i(False)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command(

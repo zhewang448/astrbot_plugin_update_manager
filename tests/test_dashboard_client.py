@@ -149,6 +149,25 @@ async def test_framework_update_reads_latest_release_notes():
 
 
 @pytest.mark.asyncio
+async def test_framework_update_release_notes_match_the_selected_channel():
+    client = build_client(
+        [
+            {
+                "status": "ok",
+                "data": [
+                    {"tag_name": "v4.29.0-beta.1", "body": "- 预发布版"},
+                    {"tag_name": "v4.28.0", "body": "- 正式版"},
+                ],
+            }
+        ]
+    )
+
+    release = await client.get_astrbot_update_release("v4.27.4")
+
+    assert release == {"version": "v4.28.0", "notes": "- 正式版"}
+
+
+@pytest.mark.asyncio
 async def test_framework_update_can_select_and_install_prerelease():
     client = build_client(
         [
@@ -228,6 +247,9 @@ def test_astrbot_update_commands_check_before_starting_update():
 
     assert "astrbot_update_enabled" in ast.get_source_segment(source, check_command)
     assert "astrbot_update_enabled" in ast.get_source_segment(source, update_command)
+    assert "get_astrbot_update_release" in ast.get_source_segment(
+        source, check_command
+    )
 
     calls = [
         (node.lineno, node.value.func.attr)

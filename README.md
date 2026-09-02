@@ -44,7 +44,7 @@
 | --- | --- | --- | --- |
 | `更新所有插件` | `updateallplugins`、`updateplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
 | `检查插件更新` | `checkpluginupdates`、`checkplugins` | 只检查可用更新，不执行更新 | 管理员 |
-| `检查astrbot更新` | `checkastrbotupdates`、`checkastrbot`、`检查AstrBot更新` | 检查 AstrBot 框架是否有可用更新 | 管理员 |
+| `检查astrbot更新` | `checkastrbotupdates`、`checkastrbot`、`检查AstrBot更新` | 检查 AstrBot 框架更新并显示目标版本的更新日志 | 管理员 |
 | `更新astrbot` | `updateastrbot`、`astrbotupdate`、`更新AstrBot` | 更新 AstrBot 核心、WebUI 和依赖，成功后重启 | 管理员 |
 | `安装插件 <链接>` | `installplugin`、`plugininstall` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
 | `清除插件数据 <插件名> --confirm` | `clearplugindata`、`clearplugin` | 清除插件持久化文件和 KV 数据并重载插件，不删除用户配置 | 管理员 |

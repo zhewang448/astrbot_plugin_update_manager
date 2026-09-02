@@ -726,29 +726,51 @@ class PluginUpdateManager(Star):
             return
 
         yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
+        release = None
         async with self._update_lock:
             try:
                 dashboard = await self._get_dashboard_client()
                 update_info = await dashboard.check_astrbot_update(
                     include_prerelease=self.astrbot_include_prerelease
                 )
+                current_version = str(update_info.get("version") or "未知版本")
+                if update_info.get("has_new_version"):
+                    release = update_info.get("target_release")
+                    if not isinstance(release, dict):
+                        try:
+                            release = await dashboard.get_astrbot_update_release(
+                                current_version,
+                                include_prerelease=self.astrbot_include_prerelease,
+                            )
+                        except Exception as exc:
+                            logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
             except Exception as exc:
                 logger.error(f"检查 AstrBot 框架更新失败：{traceback.format_exc()}")
                 yield event.plain_result(f"检查 AstrBot 框架更新失败：{exc}")
                 return
 
-        current_version = str(update_info.get("version") or "未知版本")
         if not update_info.get("has_new_version"):
             yield event.plain_result(f"AstrBot 当前为 {current_version}，已经是最新版本。")
             return
 
         message = str(update_info.get("message") or "")
         lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
-        target_version = str(update_info.get("target_version") or "").strip()
+        target_version = str(
+            (release or {}).get("version") or update_info.get("target_version") or ""
+        ).strip()
         if target_version:
-            lines.append(f"预发布版本检查已开启，目标版本：{target_version}")
+            if self.astrbot_include_prerelease:
+                lines.append(f"包含预发布版本的检查已开启，目标版本：{target_version}")
+            else:
+                lines.append(f"目标版本：{target_version}")
         elif message:
             lines.append(message)
+        if release:
+            notes = str(release.get("notes") or "").strip()
+            lines.append(
+                f"{target_version or '目标版本'} 更新日志：\n\n"
+                f"{notes or '本次发布未提供更新日志。'}"
+            )
         lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
         yield event.plain_result("\n".join(lines)).use_t2i(False)
 

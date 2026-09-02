@@ -71,6 +71,14 @@ def _compare_versions(left: object, right: object) -> int | None:
     return 0
 
 
+def _is_prerelease(value: object) -> bool:
+    normalized = str(value or "").strip()
+    if normalized.startswith(("v", "V")):
+        normalized = normalized[1:]
+    match = _VERSION_RE.fullmatch(normalized)
+    return bool(match and match.group(2))
+
+
 class DashboardClient:
     """
     面板 HTTP 客户端
@@ -128,7 +136,10 @@ class DashboardClient:
 
         current_version = str(result.get("version") or "")
         try:
-            target_release = await self._find_newer_release(current_version)
+            target_release = await self.get_astrbot_update_release(
+                current_version,
+                include_prerelease=True,
+            )
         except Exception as exc:
             logger.warning(f"获取 AstrBot 预发布版本列表失败，将仅检查正式版本：{exc}")
             return result
@@ -177,10 +188,17 @@ class DashboardClient:
             and (version := str(release.get("tag_name") or "").strip())
         ]
 
-    async def _find_newer_release(self, current_version: str) -> dict[str, str] | None:
-        """从包含预发布版本的列表中选择高于当前版本的最高版本。"""
+    async def get_astrbot_update_release(
+        self,
+        current_version: str,
+        *,
+        include_prerelease: bool = False,
+    ) -> dict[str, str] | None:
+        """选择当前更新通道中高于当前版本的最高发布版本。"""
         selected: dict[str, str] | None = None
         for release in await self._get_astrbot_releases():
+            if not include_prerelease and _is_prerelease(release["version"]):
+                continue
             if _compare_versions(release["version"], current_version) != 1:
                 continue
             if (

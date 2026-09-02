@@ -1,5 +1,9 @@
 # 更新日志
 
+## v2.7.1
+
+- 新增 `astrbot_include_prerelease` 配置项，默认关闭；开启后，AstrBot 框架检查和更新可选择更高的预发布版本。
+
 ## v2.7.0
 
 - 新增 `检查astrbot更新`（`checkastrbotupdates`）和 `更新astrbot`（`updateastrbot`）管理员指令。

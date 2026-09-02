@@ -72,7 +72,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.7.0",
+    "2.7.1",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -94,6 +94,9 @@ class PluginUpdateManager(Star):
         self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
         self.restart_mode = self.config.get("restart_mode", False)
         self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
+        self.astrbot_include_prerelease = self.config.get(
+            "astrbot_include_prerelease", False
+        )
         self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
         self.astrbot_send_changelog_to_admin = self.config.get(
             "astrbot_send_changelog_to_admin", True
@@ -498,20 +501,27 @@ class PluginUpdateManager(Star):
         调用方必须持有 ``_update_lock``，以避免与插件安装、更新或数据清理并发。
         """
         dashboard = await self._get_dashboard_client()
-        update_info = await dashboard.check_astrbot_update()
+        update_info = await dashboard.check_astrbot_update(
+            include_prerelease=self.astrbot_include_prerelease
+        )
         current_version = str(update_info.get("version") or "未知版本")
         if not update_info.get("has_new_version"):
             return f"AstrBot 当前为 {current_version}，已经是最新版本。", False, ""
 
-        release = None
+        target_version = str(update_info.get("target_version") or "latest")
+        release = update_info.get("target_release")
+        if not isinstance(release, dict):
+            release = None
         if self.astrbot_send_changelog_to_admin and self.admin_sid_list:
-            try:
-                release = await dashboard.get_astrbot_latest_release()
-            except Exception as exc:
-                logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
+            if release is None:
+                try:
+                    release = await dashboard.get_astrbot_latest_release()
+                except Exception as exc:
+                    logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
 
         logger.info("发现 AstrBot 可用更新，正在启动更新任务。")
         progress_id = await dashboard.start_astrbot_update(
+            version=target_version,
             proxy=self.proxy_address,
             reboot=False,
         )
@@ -719,7 +729,9 @@ class PluginUpdateManager(Star):
         async with self._update_lock:
             try:
                 dashboard = await self._get_dashboard_client()
-                update_info = await dashboard.check_astrbot_update()
+                update_info = await dashboard.check_astrbot_update(
+                    include_prerelease=self.astrbot_include_prerelease
+                )
             except Exception as exc:
                 logger.error(f"检查 AstrBot 框架更新失败：{traceback.format_exc()}")
                 yield event.plain_result(f"检查 AstrBot 框架更新失败：{exc}")
@@ -732,7 +744,10 @@ class PluginUpdateManager(Star):
 
         message = str(update_info.get("message") or "")
         lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
-        if message:
+        target_version = str(update_info.get("target_version") or "").strip()
+        if target_version:
+            lines.append(f"预发布版本检查已开启，目标版本：{target_version}")
+        elif message:
             lines.append(message)
         lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
         yield event.plain_result("\n".join(lines)).use_t2i(False)

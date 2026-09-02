@@ -148,6 +148,49 @@ async def test_framework_update_reads_latest_release_notes():
     ]
 
 
+@pytest.mark.asyncio
+async def test_framework_update_can_select_and_install_prerelease():
+    client = build_client(
+        [
+            {
+                "status": "success",
+                "message": "已经是最新正式版本了。",
+                "data": {"version": "v4.27.4", "has_new_version": False},
+            },
+            {
+                "status": "ok",
+                "data": [
+                    {"tag_name": "v4.28.0", "body": "- 正式版"},
+                    {"tag_name": "v4.29.0-beta.2", "body": "- 预发布版"},
+                    {"tag_name": "v4.29.0-beta.1", "body": "- 较早预发布版"},
+                ],
+            },
+            {"status": "ok", "data": {"id": "progress-prerelease"}},
+        ]
+    )
+
+    check = await client.check_astrbot_update(include_prerelease=True)
+    progress_id = await client.start_astrbot_update(
+        version=check["target_version"], proxy="", reboot=False
+    )
+
+    assert check["has_new_version"] is True
+    assert check["target_version"] == "v4.29.0-beta.2"
+    assert check["target_release"] == {
+        "version": "v4.29.0-beta.2",
+        "notes": "- 预发布版",
+    }
+    assert progress_id == "progress-prerelease"
+    assert client._session.calls[-1] == (
+        "POST",
+        "http://localhost/api/update/do",
+        {
+            "headers": {"Authorization": "Bearer test-token"},
+            "json": {"version": "v4.29.0-beta.2", "proxy": None, "reboot": False},
+        },
+    )
+
+
 def test_astrbot_update_commands_check_before_starting_update():
     source = Path("main.py").read_text(encoding="utf-8")
     module = ast.parse(source)
@@ -215,6 +258,10 @@ def test_astrbot_update_commands_check_before_starting_update():
     }
     assert legacy_plugin_schedule.issubset(schema)
     assert schema["astrbot_update_enabled"]["default"] is True
+    assert schema["astrbot_include_prerelease"]["default"] is False
+    assert schema["astrbot_include_prerelease"]["condition"] == {
+        "astrbot_update_enabled": True
+    }
     assert schema["astrbot_auto_update"]["default"] is False
     assert schema["astrbot_auto_update"]["condition"] == {
         "astrbot_update_enabled": True

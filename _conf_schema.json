@@ -163,6 +163,15 @@
     "hint": "关闭后，检查astrbot更新、更新astrbot 和 AstrBot 定时更新均不会执行；重启astrbot 不受影响",
     "default": true
   },
+  "astrbot_include_prerelease": {
+    "description": "AstrBot 框架：检查预发布版本",
+    "type": "bool",
+    "hint": "开启后，检查和定时更新会将高于当前版本的预发布版本纳入候选，并按选定版本更新；默认仅检查正式版本",
+    "default": false,
+    "condition": {
+      "astrbot_update_enabled": true
+    }
+  },
   "astrbot_auto_update": {
     "description": "定时更新 AstrBot 框架",
     "type": "bool",

@@ -1,4 +1,4 @@
-# AstrBot 插件更新管理器 v2.7.1
+# AstrBot 插件更新管理器 v2.7.2
 
 用于批量检查并更新已安装的 AstrBot 插件与 AstrBot 框架，支持手动更新、灵活定时检查、管理员通知和更新后自动重启。
 
@@ -44,6 +44,7 @@
 | --- | --- | --- | --- |
 | `更新所有插件` | `updateallplugins`、`updateplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
 | `检查插件更新` | `checkpluginupdates`、`checkplugins` | 只检查可用更新，不执行更新 | 管理员 |
+| `测试插件更新日志` | `testpluginchangelog` | 向已配置管理员发送两条模拟更新日志，用于确认转发展示效果 | 管理员 |
 | `检查astrbot更新` | `checkastrbotupdates`、`checkastrbot`、`检查AstrBot更新` | 检查 AstrBot 框架更新并显示目标版本的更新日志 | 管理员 |
 | `更新astrbot` | `updateastrbot`、`astrbotupdate`、`更新AstrBot` | 更新 AstrBot 核心、WebUI 和依赖，成功后重启 | 管理员 |
 | `安装插件 <链接>` | `installplugin`、`plugininstall` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
@@ -179,6 +180,7 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 | `check_on_startup` | 插件更新：方式 2 下启动后是否立即检查一次 |
 | `restart_mode` | 插件更新：有插件更新成功后是否自动重启 AstrBot |
 | `send_changelog_to_admin` | 插件更新：成功后读取本地 CHANGELOG，以合并转发发送给管理员 |
+| `update_report_fields` | 通知：发现可更新插件时每个插件的汇报字段，可多选；固定按“插件名称、插件 ID、版本变化、仓库链接、作者”顺序显示 |
 | `astrbot_update_enabled` | AstrBot 框架：总开关，默认开启；不影响 `重启astrbot` |
 | `astrbot_include_prerelease` | AstrBot 框架：是否将预发布版本纳入检查和更新，默认关闭 |
 | `astrbot_changelog_forward_threshold` | AstrBot 框架：更新日志超过该字数时使用合并转发；检查命令回复及手动/定时更新的管理员通知均适用，默认 100；填 0 时所有非空日志均转发 |
@@ -198,6 +200,18 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 | `test_mode` | 调试：在插件目录生成 `test.md` 调试数据 |
 
 黑名单优先于白名单。测试分支或不希望自动更新的插件，应主动加入黑名单。
+
+### 更新汇报
+
+`update_report_fields` 默认勾选“插件名称”和“版本变化”，用于 `检查插件更新` 与定时更新通知中“发现 N 个插件需要更新”后的插件列表。可额外勾选插件 ID、仓库链接和作者；字段顺序固定，不随勾选顺序改变。
+
+仓库链接来自本次实际命中的更新来源：插件市场使用对应市场条目的 `repo`，自定义 GitHub 更新源使用其绑定仓库地址；缺失的元数据会显示为“未知”，不会使用其他字段补充。
+
+更新成功后发送的 CHANGELOG 不受 `update_report_fields` 影响。每个插件的日志始终以 `【插件名称】` 开头，随后显示版本范围。
+
+### 测试更新日志
+
+发送 `测试插件更新日志` 可向 `admin_sid_list` 中的管理员发送两条模拟插件更新日志，复用实际的合并转发发送逻辑。该指令不检查、不下载也不更新任何插件；若未配置管理员 SID，会直接提示。
 
 ## 自定义更新源
 

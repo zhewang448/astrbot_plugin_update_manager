@@ -6,6 +6,7 @@ from plugin_utils import (
     clean_version,
     extract_changelog_range,
     find_market_entry,
+    format_update_report,
     is_valid_version,
     normalize_repo,
     normalize_weekdays,
@@ -234,6 +235,44 @@ class ScheduleParsingTests(unittest.TestCase):
         valid, invalid = normalize_weekdays(["SUN", "mon", "fri", "holiday"])
         self.assertEqual(valid, ["mon", "fri", "sun"])
         self.assertEqual(invalid, ["holiday"])
+
+
+class UpdateReportFormattingTests(unittest.TestCase):
+    def test_selected_fields_use_fixed_schema_order(self):
+        report = format_update_report(
+            [
+                {
+                    "name": "astrbot_plugin_demo",
+                    "display_name": "示例插件",
+                    "version": "v1.0.0",
+                    "online_version": "v1.1.0",
+                    "repository_url": "https://example.com/demo",
+                    "author": "AstrBot",
+                }
+            ],
+            ["author", "repository_url", "plugin_id", "display_name", "version"],
+        )
+
+        self.assertEqual(
+            report,
+            "发现 1 个插件需要更新：\n"
+            "1.\n"
+            "   插件名称：示例插件\n"
+            "   插件 ID：astrbot_plugin_demo\n"
+            "   版本：v1.0.0 → v1.1.0\n"
+            "   仓库链接：https://example.com/demo\n"
+            "   作者：AstrBot",
+        )
+
+    def test_missing_values_are_reported_as_unknown_without_substitution(self):
+        report = format_update_report(
+            [{"name": "astrbot_plugin_demo", "online_version": "v1.1.0"}],
+            ["display_name", "version", "repository_url"],
+        )
+
+        self.assertIn("插件名称：未知", report)
+        self.assertIn("版本：未知 → v1.1.0", report)
+        self.assertIn("仓库链接：未知", report)
 
 
 class ChangelogTests(unittest.TestCase):

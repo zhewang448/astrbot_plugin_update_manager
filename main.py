@@ -29,6 +29,7 @@ from .plugin_utils import (
     extract_changelog_range,
     find_local_changelog,
     find_market_entry,
+    format_update_report,
     is_valid_version,
     normalize_github_url_to_archive,
     normalize_name,
@@ -73,7 +74,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.7.1",
+    "2.7.2",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -93,6 +94,10 @@ class PluginUpdateManager(Star):
         self.black_plugin_list = list(self.config.get("black_plugin_list", []) or [])
         self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
         self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
+        self.update_report_fields = list(
+            self.config.get("update_report_fields", ["display_name", "version"])
+            or []
+        )
         self.restart_mode = self.config.get("restart_mode", False)
         self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
         self.astrbot_include_prerelease = self.config.get(
@@ -650,7 +655,11 @@ class PluginUpdateManager(Star):
                         error_messages.append(f"更新插件 {plugin_name} 失败：{exc}")
                         logger.error(f"更新插件 {plugin_name} 失败：{traceback.format_exc()}")
 
-                lines = [f"发现 {len(check_result.updates)} 个插件需要更新。"]
+                lines = [
+                    format_update_report(
+                        check_result.updates, self.update_report_fields
+                    )
+                ]
                 if succeeded_plugins:
                     lines.append(
                         f"成功更新 {len(succeeded_plugins)} 个插件：\n"
@@ -1059,6 +1068,9 @@ class PluginUpdateManager(Star):
             local_plugins.append(
                 {
                     "name": name,
+                    "display_name": str(
+                        getattr(plugin, "display_name", "") or ""
+                    ).strip(),
                     "version": str(getattr(plugin, "version", "") or "").strip(),
                     "author": str(getattr(plugin, "author", "") or "").strip(),
                     "repo": str(getattr(plugin, "repo", "") or "").strip(),
@@ -1116,7 +1128,7 @@ class PluginUpdateManager(Star):
                                 remote["version"],
                                 download_url=remote["download_url"],
                                 source_type="custom",
-                                source_repo=remote["repo_url"],
+                                repository_url=remote["repo_url"],
                                 source_ref=remote["ref"],
                                 commit_sha=remote["commit_sha"],
                                 matched_by="custom_binding",
@@ -1168,6 +1180,9 @@ class PluginUpdateManager(Star):
                                 match.entry.get("download_url") or ""
                             ).strip(),
                             source_type="market",
+                            repository_url=str(
+                                match.entry.get("repo") or ""
+                            ).strip(),
                             market_id=match.entry.get("_market_id", ""),
                             matched_by=match.matched_by,
                         )
@@ -1241,7 +1256,8 @@ class PluginUpdateManager(Star):
             if not changelog_text:
                 continue
 
-            header = f"{plugin_name}  {old_version} → {new_version}"
+            display_name = str(info.get("display_name") or plugin_name or "未知")
+            header = f"【{display_name}】\n{old_version or '未知'} → {new_version or '未知'}"
             node_texts.append(f"{header}\n\n{changelog_text}")
 
         if not node_texts:
@@ -1278,6 +1294,21 @@ class PluginUpdateManager(Star):
         )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("测试插件更新日志", alias={"testpluginchangelog"})
+    async def test_plugin_changelog_command(self, event: AstrMessageEvent):
+        """向管理员发送模拟日志，用于确认合并转发的展示效果。"""
+        if not self.admin_sid_list:
+            yield event.plain_result("未配置管理员 SID，无法发送模拟插件更新日志。")
+            return
+
+        sample_logs = [
+            "【插件更新管理器】\nv2.7.1 → v2.7.2\n\n- 新增模拟更新日志测试指令\n- 优化更新通知展示",
+            "【示例 RSS 插件】\nv1.4.0 → v1.5.0\n\n- 新增订阅过滤规则\n- 修复推送失败重试",
+        ]
+        await self._try_send_changelog_forward(sample_logs)
+        yield event.plain_result("已向管理员发送模拟插件更新日志。")
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("检查插件更新", alias={"checkpluginupdates", "checkplugins"})
     async def check_plugins_command(self, event: AstrMessageEvent):
         """只检查有无可用更新，不执行更新操作。"""
@@ -1306,16 +1337,9 @@ class PluginUpdateManager(Star):
             yield event.plain_result(message)
             return
 
-        lines = [f"发现 {len(check_result.updates)} 个可更新插件："]
-        for plugin in check_result.updates:
-            source_label = (
-                "自定义源" if plugin.get("source_type") == "custom" else "插件市场"
-            )
-            lines.append(
-                f"• {plugin['name']}  "
-                f"{plugin.get('version') or '?'} → {plugin.get('online_version') or '?'}"
-                f"  [{source_label}]"
-            )
+        lines = [
+            format_update_report(check_result.updates, self.update_report_fields)
+        ]
         if notes:
             lines.append(f"\n{notes}")
         yield event.plain_result(

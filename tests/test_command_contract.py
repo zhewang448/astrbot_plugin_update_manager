@@ -95,6 +95,32 @@ class CustomSourceMetadataRequestContractTests(unittest.TestCase):
         self.assertNotIn("raw.githubusercontent.com", source)
 
 
+class TestPluginChangelogCommandContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        cls.command = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "test_plugin_changelog_command"
+        )
+
+    def test_command_is_admin_only_and_uses_the_actual_forwarding_path(self):
+        decorators = [ast.unparse(item) for item in self.command.decorator_list]
+        source = ast.unparse(self.command)
+        self.assertIn("filter.permission_type(filter.PermissionType.ADMIN)", decorators)
+        self.assertIn(
+            "filter.command('测试插件更新日志', alias={'testpluginchangelog'})",
+            decorators,
+        )
+        self.assertIn("if not self.admin_sid_list", source)
+        self.assertIn("await self._try_send_changelog_forward(sample_logs)", source)
+        self.assertIn("【插件更新管理器】", source)
+        self.assertIn("【示例 RSS 插件】", source)
+
+
 class ManualRestartCompletionNotificationContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

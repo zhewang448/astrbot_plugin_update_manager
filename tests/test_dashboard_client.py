@@ -321,6 +321,21 @@ def test_astrbot_update_commands_check_before_starting_update():
     ]
     assert schema["astrbot_check_times"]["default"] == ["04:00"]
     assert schema["astrbot_check_on_startup"]["default"] is False
+    assert schema["update_report_fields"] == {
+        "description": "通知：发现更新时的汇报字段",
+        "type": "list",
+        "options": [
+            "display_name",
+            "plugin_id",
+            "version",
+            "repository_url",
+            "author",
+        ],
+        "labels": ["插件名称", "插件 ID", "版本变化", "仓库链接", "作者"],
+        "render_type": "checkbox",
+        "hint": "用于“发现 N 个插件需要更新”的通知；字段显示顺序固定。更新日志始终带插件名称，不受此项影响。",
+        "default": ["display_name", "version"],
+    }
 
     scheduler = functions["_initialize_scheduler"]
     scheduler_source = ast.get_source_segment(source, scheduler)

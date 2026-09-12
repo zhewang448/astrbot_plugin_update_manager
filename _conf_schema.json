@@ -83,6 +83,30 @@
     "hint": "定时检查结束后向这些会话发送结果；可在对应会话发送 /sid 获取",
     "default": []
   },
+  "update_report_fields": {
+    "description": "通知：发现更新时的汇报字段",
+    "type": "list",
+    "options": [
+      "display_name",
+      "plugin_id",
+      "version",
+      "repository_url",
+      "author"
+    ],
+    "labels": [
+      "插件名称",
+      "插件 ID",
+      "版本变化",
+      "仓库链接",
+      "作者"
+    ],
+    "render_type": "checkbox",
+    "hint": "用于“发现 N 个插件需要更新”的通知；字段显示顺序固定。更新日志始终带插件名称，不受此项影响。",
+    "default": [
+      "display_name",
+      "version"
+    ]
+  },
   "github_proxy": {
     "description": "网络：GitHub 加速地址",
     "type": "string",

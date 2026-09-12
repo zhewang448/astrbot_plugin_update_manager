@@ -39,6 +39,22 @@ CHANGELOG_FILENAMES = (
     "docs/changelog.md",
 )
 
+UPDATE_REPORT_FIELD_ORDER = (
+    "display_name",
+    "plugin_id",
+    "version",
+    "repository_url",
+    "author",
+)
+
+UPDATE_REPORT_FIELD_LABELS = {
+    "display_name": "插件名称",
+    "plugin_id": "插件 ID",
+    "version": "版本",
+    "repository_url": "仓库链接",
+    "author": "作者",
+}
+
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*$")
 _VERSION_TOKEN_RE = re.compile(r"v?(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)", re.IGNORECASE)
 
@@ -130,6 +146,33 @@ class BoundedCache:
 
 def normalize_name(value: object) -> str:
     return str(value or "").strip().lower().replace("-", "_")
+
+
+def format_update_report(
+    updates: list[dict[str, Any]], selected_fields: object
+) -> str:
+    """按固定字段顺序生成发现插件更新的汇报文本。"""
+    selected = {
+        str(value).strip()
+        for value in (selected_fields if isinstance(selected_fields, list) else [])
+    }
+    lines = [f"发现 {len(updates)} 个插件需要更新："]
+    for index, plugin in enumerate(updates, start=1):
+        lines.append(f"{index}.")
+        for field_name in UPDATE_REPORT_FIELD_ORDER:
+            if field_name not in selected:
+                continue
+            if field_name == "plugin_id":
+                value = plugin.get("name") or "未知"
+            elif field_name == "version":
+                value = (
+                    f"{plugin.get('version') or '未知'} → "
+                    f"{plugin.get('online_version') or '未知'}"
+                )
+            else:
+                value = plugin.get(field_name) or "未知"
+            lines.append(f"   {UPDATE_REPORT_FIELD_LABELS[field_name]}：{value}")
+    return "\n".join(lines)
 
 
 def normalize_author(value: object) -> str:

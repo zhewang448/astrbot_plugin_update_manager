@@ -107,44 +107,20 @@ class TestPluginChangelogCommandContractTests(unittest.TestCase):
             and node.name == "test_plugin_changelog_command"
         )
 
-    def test_command_is_admin_only_and_uses_the_actual_forwarding_path(self):
+    def test_command_is_admin_only_and_returns_real_local_logs(self):
         decorators = [ast.unparse(item) for item in self.command.decorator_list]
         source = ast.unparse(self.command)
         self.assertIn("filter.permission_type(filter.PermissionType.ADMIN)", decorators)
         self.assertIn(
-            "filter.command('测试插件日志', alias={'testpluginchangelog', '测试插件更新日志'})",
+            "filter.command('测试插件管理日志', alias={'testpluginchangelog', '测试插件日志', '测试插件更新日志'})",
             decorators,
         )
-        self.assertIn("entries = self._get_local_plugin_preview_entries()", source)
-        self.assertIn("report_preview = self._build_update_report_preview(entries)", source)
+        self.assertIn("entries = self._get_local_plugin_preview_entries()[:5]", source)
+        self.assertIn("report = self._build_local_plugin_test_report(entries)", source)
         self.assertIn("await self._build_local_plugin_changelog_nodes(entries)", source)
-        self.assertIn("if self.astrbot_update_enabled", source)
+        self.assertIn("if bool(self.config.get('astrbot_update_enabled', True))", source)
         self.assertIn("await self._build_latest_astrbot_changelog_node()", source)
-        self.assertIn("await self.send_message_to_admin", source)
-        self.assertIn("await self._try_send_changelog_forward(node_texts)", source)
-
-
-class PreviewPluginUpdateReportCommandContractTests(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        source_path = Path(__file__).resolve().parents[1] / "main.py"
-        tree = ast.parse(source_path.read_text(encoding="utf-8"))
-        cls.command = next(
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.AsyncFunctionDef)
-            and node.name == "preview_plugin_update_report_command"
-        )
-
-    def test_preview_command_is_admin_only_and_uses_current_configuration(self):
-        decorators = [ast.unparse(item) for item in self.command.decorator_list]
-        source = ast.unparse(self.command)
-        self.assertIn("filter.permission_type(filter.PermissionType.ADMIN)", decorators)
-        self.assertIn(
-            "filter.command('预览插件更新汇报', alias={'previewpluginupdate'})",
-            decorators,
-        )
-        self.assertIn("self._build_update_report_preview()", source)
+        self.assertIn("yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)", source)
 
 
 class UpdateManagerHelpCommandContractTests(unittest.TestCase):
@@ -176,7 +152,6 @@ class CommandOrderingContractTests(unittest.TestCase):
             "update_manager_help_command",
             "check_plugins_command",
             "update_all_plugins_command",
-            "preview_plugin_update_report_command",
             "test_plugin_changelog_command",
             "install_plugin_command",
             "reinstall_plugin_command",

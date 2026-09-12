@@ -46,8 +46,7 @@
 | **插件更新** |  |  |  |
 | `更新所有插件` | `updateallplugins`、`updateplugins`、`更新全部插件` | 检查并更新所有符合条件的插件 | 管理员 |
 | `检查插件更新` | `checkpluginupdates`、`checkplugins` | 只检查可用更新，不执行更新 | 管理员 |
-| `预览插件更新汇报` | `previewpluginupdate` | 在当前会话预览本机已加载插件的当前汇报字段效果 | 管理员 |
-| `测试插件日志` | `testpluginchangelog`、`测试插件更新日志` | 向已配置管理员发送本机插件的最近 CHANGELOG | 管理员 |
+| `测试插件管理日志` | `testpluginchangelog`、`测试插件日志`、`测试插件更新日志` | 直接返回最多 5 个本机插件的测试汇报和最近 CHANGELOG | 管理员 |
 | **插件维护** |  |  |  |
 | `安装插件 <链接>` | `installplugin`、`plugininstall` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
 | `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin`、`reinstall` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
@@ -214,9 +213,9 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 
 更新成功后发送的 CHANGELOG 不受 `update_report_fields` 影响。每个插件的日志始终以 `【插件名称】` 开头，随后显示版本范围。
 
-### 预览与测试更新通知
+### 测试更新通知
 
-发送 `预览插件更新汇报` 可在当前会话查看本机已加载插件的模拟更新检查汇报，内容读取当前 `update_report_fields` 配置。发送 `测试插件日志` 会先向 `admin_sid_list` 发送同一份汇报，再读取每个本机插件的最新 CHANGELOG 小节并通过实际的合并转发逻辑发送；`astrbot_update_enabled` 开启时，还会附加 Dashboard 返回的最近一次 AstrBot 发布日志。两条指令都不检查、不下载也不更新任何插件；测试指令未配置管理员 SID 时会直接提示。
+发送 `测试插件管理日志` 会在当前会话直接返回最多 5 个本机已加载插件的模拟更新检查汇报，并以合并转发形式返回各插件最近的 CHANGELOG 小节。`astrbot_update_enabled` 开启时，还会附加 Dashboard 返回的最近一次 AstrBot 发布日志。该指令不检查、不下载也不更新任何插件。
 
 ## 自定义更新源
 

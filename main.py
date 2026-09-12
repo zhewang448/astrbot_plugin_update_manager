@@ -755,7 +755,7 @@ class PluginUpdateManager(Star):
             )
         return entries
 
-    def _build_update_report_preview(
+    def _build_local_plugin_test_report(
         self, entries: list[dict[str, str]] | None = None
     ) -> str:
         entries = entries if entries is not None else self._get_local_plugin_preview_entries()
@@ -788,7 +788,8 @@ class PluginUpdateManager(Star):
                     except Exception as exc:
                         changelog_text = f"读取本机 CHANGELOG.md 失败：{exc}"
             node_texts.append(
-                f"【{display_name}】\n当前版本：{entry['version']}\n\n"
+                f"【{display_name}】\n"
+                f"模拟更新：{entry['version']} → {entry['online_version']}\n\n"
                 f"{truncate_text(changelog_text, MAX_CHANGELOG_CHARS_PER_PLUGIN)}"
             )
         return node_texts
@@ -1238,8 +1239,7 @@ class PluginUpdateManager(Star):
             "【插件更新】\n"
             "检查插件更新：仅检查可用更新。\n"
             "更新所有插件：检查并更新全部符合条件的插件。\n"
-            "预览插件更新汇报：预览当前汇报字段配置。\n"
-            "测试插件日志：向管理员发送本机插件日志；框架更新开启时附加最近一次 AstrBot 发布日志。\n\n"
+            "测试插件管理日志：返回最多 5 个本机插件的测试汇报和更新日志；框架更新开启时附加最近一次 AstrBot 发布日志。\n\n"
             "【插件维护】\n"
             "安装插件 <链接>：安装并加载插件。\n"
             "重新安装插件 <插件名> [地址] [--no-proxy]：覆盖重装插件。\n"
@@ -1312,34 +1312,40 @@ class PluginUpdateManager(Star):
 
 
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("预览插件更新汇报", alias={"previewpluginupdate"})
-    async def preview_plugin_update_report_command(self, event: AstrMessageEvent):
-        """在当前会话预览 update_report_fields 的实际效果。"""
-        yield event.plain_result(self._build_update_report_preview()).use_t2i(False)
-
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command(
-        "测试插件日志",
-        alias={"testpluginchangelog", "测试插件更新日志"},
+        "测试插件管理日志",
+        alias={"testpluginchangelog", "测试插件日志", "测试插件更新日志"},
     )
     async def test_plugin_changelog_command(self, event: AstrMessageEvent):
-        """向管理员发送本机插件和 AstrBot 的最新日志。"""
-        if not self.admin_sid_list:
-            yield event.plain_result("未配置管理员 SID，无法发送测试插件日志。")
+        """直接返回本机插件的测试汇报和更新日志。"""
+        entries = self._get_local_plugin_preview_entries()[:5]
+        report = self._build_local_plugin_test_report(entries)
+        yield event.plain_result(f"测试更新检查汇报：\n\n{report}").use_t2i(False)
+
+        node_texts = await self._build_local_plugin_changelog_nodes(entries)
+        if bool(self.config.get("astrbot_update_enabled", True)):
+            node_texts.append(await self._build_latest_astrbot_changelog_node())
+        if not node_texts:
+            yield event.plain_result("本机没有可用于测试日志的已加载插件。")
             return
 
-        entries = self._get_local_plugin_preview_entries()
-        report_preview = self._build_update_report_preview(entries)
-        await self.send_message_to_admin(
-            [Comp.Plain(text=f"测试更新检查汇报：\n\n{report_preview}")]
-        )
-        node_texts = await self._build_local_plugin_changelog_nodes(entries)
-        if self.astrbot_update_enabled:
-            node_texts.append(await self._build_latest_astrbot_changelog_node())
-        if node_texts:
-            await self._try_send_changelog_forward(node_texts)
-        yield event.plain_result("已向管理员发送本机插件测试汇报和更新日志。")
+        NodeCls = getattr(Comp, "Node", None)
+        NodesCls = getattr(Comp, "Nodes", None)
+        if NodeCls and NodesCls:
+            nodes = [
+                NodeCls(
+                    uin="0",
+                    name="插件更新管理器",
+                    content=[Comp.Plain(text=node_text)],
+                )
+                for node_text in node_texts
+            ]
+            yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)
+            return
+
+        yield event.plain_result(
+            "测试更新日志：\n\n" + "\n\n".join(node_texts)
+        ).use_t2i(False)
 
 
 # ===== 管理命令：插件维护 =====

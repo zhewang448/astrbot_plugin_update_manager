@@ -39,6 +39,22 @@ CHANGELOG_FILENAMES = (
     "docs/changelog.md",
 )
 
+UPDATE_REPORT_FIELD_ORDER = (
+    "display_name",
+    "plugin_id",
+    "version",
+    "repository_url",
+    "author",
+)
+
+UPDATE_REPORT_FIELD_LABELS = {
+    "display_name": "插件名称",
+    "plugin_id": "插件 ID",
+    "version": "版本",
+    "repository_url": "仓库链接",
+    "author": "作者",
+}
+
 _HEADING_RE = re.compile(r"^\s{0,3}(#{1,6})\s+(.*?)\s*$")
 _VERSION_TOKEN_RE = re.compile(r"v?(\d+(?:\.\d+)+(?:-[0-9A-Za-z.-]+)?)", re.IGNORECASE)
 
@@ -130,6 +146,33 @@ class BoundedCache:
 
 def normalize_name(value: object) -> str:
     return str(value or "").strip().lower().replace("-", "_")
+
+
+def format_update_report(
+    updates: list[dict[str, Any]], selected_fields: object
+) -> str:
+    """按固定字段顺序生成发现插件更新的汇报文本。"""
+    selected = {
+        str(value).strip()
+        for value in (selected_fields if isinstance(selected_fields, list) else [])
+    }
+    lines = [f"发现 {len(updates)} 个插件需要更新："]
+    for index, plugin in enumerate(updates, start=1):
+        lines.append(f"{index}.")
+        for field_name in UPDATE_REPORT_FIELD_ORDER:
+            if field_name not in selected:
+                continue
+            if field_name == "plugin_id":
+                value = plugin.get("name") or "未知"
+            elif field_name == "version":
+                value = (
+                    f"{plugin.get('version') or '未知'} → "
+                    f"{plugin.get('online_version') or '未知'}"
+                )
+            else:
+                value = plugin.get(field_name) or "未知"
+            lines.append(f"   {UPDATE_REPORT_FIELD_LABELS[field_name]}：{value}")
+    return "\n".join(lines)
 
 
 def normalize_author(value: object) -> str:
@@ -489,6 +532,38 @@ def extract_changelog_range(
         if block:
             blocks.append(block)
     return "\n\n".join(blocks).strip()
+
+
+def extract_latest_changelog(text: object) -> str:
+    """提取 CHANGELOG 中版本号最高的一节。"""
+    content = str(text or "")
+    if not content.strip():
+        return ""
+
+    lines = content.splitlines()
+    sections: list[tuple[tuple[int, ...], int, int]] = []
+    current: tuple[tuple[int, ...], int] | None = None
+    for line_no, line in enumerate(lines):
+        heading = _HEADING_RE.match(line)
+        if not heading:
+            continue
+        token = _VERSION_TOKEN_RE.search(heading.group(2))
+        if not token:
+            continue
+        version_key = version_sort_key(token.group(1))
+        if not version_key:
+            continue
+        if current is not None:
+            sections.append((current[0], current[1], line_no))
+        current = (version_key, line_no)
+
+    if current is not None:
+        sections.append((current[0], current[1], len(lines)))
+    if not sections:
+        return ""
+
+    _, start, end = max(sections, key=lambda item: item[0])
+    return "\n".join(lines[start:end]).strip()
 
 
 def parse_rate_limit_headers(headers: object) -> str:

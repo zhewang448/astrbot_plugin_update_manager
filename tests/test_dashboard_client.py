@@ -303,6 +303,7 @@ def test_astrbot_update_commands_check_before_starting_update():
         source, functions["_scheduled_astrbot_update"]
     )
     assert "astrbot_changelog_forward_threshold" in check_command_source
+    assert "forward_result_text = result_text.replace(displayed_notes, notes)" in check_command_source
     assert "event.chain_result" in check_command_source
     assert "truncate_text(notes, MAX_TOTAL_CHANGELOG_CHARS)" in check_command_source
     assert "_send_astrbot_changelog" in update_command_source

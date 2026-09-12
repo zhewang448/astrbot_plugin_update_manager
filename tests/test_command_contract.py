@@ -121,6 +121,7 @@ class TestPluginChangelogCommandContractTests(unittest.TestCase):
         self.assertIn("if bool(self.config.get('astrbot_update_enabled', True))", source)
         self.assertIn("await self._build_latest_astrbot_changelog_node()", source)
         self.assertIn("yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)", source)
+        self.assertNotIn("truncate_text", source)
 
 
 class UpdateManagerHelpCommandContractTests(unittest.TestCase):

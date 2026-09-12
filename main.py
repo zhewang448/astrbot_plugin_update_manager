@@ -55,7 +55,6 @@ MARKET_URLS = (
     "https://github.com/AstrBotDevs/AstrBot_Plugins_Collection/raw/refs/heads/main/plugin_cache_original.json",
 )
 PLUGIN_NAME = "astrbot_plugin_update_manager"
-MAX_CHANGELOG_CHARS_PER_PLUGIN = 2000
 MAX_TOTAL_CHANGELOG_CHARS = 6000
 MAX_STATUS_MESSAGE_CHARS = 3000
 
@@ -559,10 +558,7 @@ class PluginUpdateManager(Star):
                 changelog = ""
                 if release:
                     notes = release["notes"] or "本次发布未提供更新日志。"
-                    changelog = truncate_text(
-                        f"AstrBot {release['version']} 更新日志：\n\n{notes}",
-                        MAX_TOTAL_CHANGELOG_CHARS,
-                    )
+                    changelog = f"AstrBot {release['version']} 更新日志：\n\n{notes}"
                 return "AstrBot 更新完成。", True, changelog
             if status == "error":
                 return (
@@ -790,7 +786,7 @@ class PluginUpdateManager(Star):
             node_texts.append(
                 f"【{display_name}】\n"
                 f"模拟更新：{entry['version']} → {entry['online_version']}\n\n"
-                f"{truncate_text(changelog_text, MAX_CHANGELOG_CHARS_PER_PLUGIN)}"
+                f"{changelog_text}"
             )
         return node_texts
 
@@ -805,10 +801,7 @@ class PluginUpdateManager(Star):
             return "【AstrBot】\n\n未获取到可用的发布更新日志。"
         version = str(release.get("version") or "未知版本")
         notes = str(release.get("notes") or "本次发布未提供更新日志。")
-        return truncate_text(
-            f"【AstrBot】\n最近一次发布：{version}\n\n{notes}",
-            MAX_TOTAL_CHANGELOG_CHARS,
-        )
+        return f"【AstrBot】\n最近一次发布：{version}\n\n{notes}"
 
 
 
@@ -1181,9 +1174,6 @@ class PluginUpdateManager(Star):
                     changelog_path.read_text, encoding="utf-8", errors="replace"
                 )
                 changelog_text = extract_changelog_range(raw_text, old_version, new_version)
-                changelog_text = truncate_text(
-                    changelog_text, MAX_CHANGELOG_CHARS_PER_PLUGIN
-                )
             except Exception as exc:
                 logger.warning(f"读取插件 {plugin_name} 的 CHANGELOG 失败：{exc}")
                 continue
@@ -1591,8 +1581,8 @@ class PluginUpdateManager(Star):
                 )
             elif custom_url and not supports_download_url:
                 yield event.plain_result(
-                    f"当前 AstrBot 版本不支持指定下载地址。\n"
-                    f"请升级 AstrBot 或使用不带 URL 参数的重新安装命令。"
+                    "当前 AstrBot 版本不支持指定下载地址。\n"
+                    "请升级 AstrBot 或使用不带 URL 参数的重新安装命令。"
                 )
                 return
 
@@ -1815,11 +1805,12 @@ class PluginUpdateManager(Star):
             NodesCls = getattr(Comp, "Nodes", None)
             if NodeCls and NodesCls:
                 try:
+                    forward_result_text = result_text.replace(displayed_notes, notes)
                     nodes = [
                         NodeCls(
                             uin="0",
                             name="AstrBot 更新日志",
-                            content=[Comp.Plain(text=result_text)],
+                            content=[Comp.Plain(text=forward_result_text)],
                         )
                     ]
                     yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)

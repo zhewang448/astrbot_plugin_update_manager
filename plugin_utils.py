@@ -534,6 +534,38 @@ def extract_changelog_range(
     return "\n\n".join(blocks).strip()
 
 
+def extract_latest_changelog(text: object) -> str:
+    """提取 CHANGELOG 中版本号最高的一节。"""
+    content = str(text or "")
+    if not content.strip():
+        return ""
+
+    lines = content.splitlines()
+    sections: list[tuple[tuple[int, ...], int, int]] = []
+    current: tuple[tuple[int, ...], int] | None = None
+    for line_no, line in enumerate(lines):
+        heading = _HEADING_RE.match(line)
+        if not heading:
+            continue
+        token = _VERSION_TOKEN_RE.search(heading.group(2))
+        if not token:
+            continue
+        version_key = version_sort_key(token.group(1))
+        if not version_key:
+            continue
+        if current is not None:
+            sections.append((current[0], current[1], line_no))
+        current = (version_key, line_no)
+
+    if current is not None:
+        sections.append((current[0], current[1], len(lines)))
+    if not sections:
+        return ""
+
+    _, start, end = max(sections, key=lambda item: item[0])
+    return "\n".join(lines[start:end]).strip()
+
+
 def parse_rate_limit_headers(headers: object) -> str:
     """从 GitHub 响应头识别限流，返回可读提示，未限流则返回空串。"""
     getter: Callable[[str], Any] | None = getattr(headers, "get", None)

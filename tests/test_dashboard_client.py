@@ -334,7 +334,7 @@ def test_astrbot_update_commands_check_before_starting_update():
         "labels": ["插件名称", "插件 ID", "版本变化", "仓库链接", "作者"],
         "render_type": "checkbox",
         "hint": "用于“发现 N 个插件需要更新”的通知；字段显示顺序固定。更新日志始终带插件名称，不受此项影响。",
-        "default": ["display_name", "version"],
+        "default": ["display_name", "plugin_id", "version"],
     }
 
     scheduler = functions["_initialize_scheduler"]

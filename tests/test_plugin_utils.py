@@ -5,6 +5,7 @@ from plugin_utils import (
     build_market_index,
     clean_version,
     extract_changelog_range,
+    extract_latest_changelog,
     find_market_entry,
     format_update_report,
     is_valid_version,
@@ -301,6 +302,12 @@ class ChangelogTests(unittest.TestCase):
 
     def test_empty_content_returns_empty_string(self):
         self.assertEqual(extract_changelog_range("", "1.0.0", "2.0.0"), "")
+
+    def test_latest_changelog_returns_only_the_highest_version_section(self):
+        text = extract_latest_changelog(self.SAMPLE)
+        self.assertIn("v1.3.0", text)
+        self.assertIn("新增 A", text)
+        self.assertNotIn("v1.2.0", text)
 
     def test_out_of_order_heading_before_main_title_is_handled(self):
         # CHANGELOG 里版本小节出现在 # 标题之前的情况（本仓库曾经的格式问题）。

@@ -26,6 +26,7 @@ from .plugin_utils import (
     apply_github_proxy,
     build_market_index,
     clean_version,
+    extract_latest_changelog,
     extract_changelog_range,
     find_local_changelog,
     find_market_entry,
@@ -94,10 +95,6 @@ class PluginUpdateManager(Star):
         self.black_plugin_list = list(self.config.get("black_plugin_list", []) or [])
         self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
         self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
-        self.update_report_fields = list(
-            self.config.get("update_report_fields", ["display_name", "version"])
-            or []
-        )
         self.restart_mode = self.config.get("restart_mode", False)
         self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
         self.astrbot_include_prerelease = self.config.get(
@@ -657,7 +654,7 @@ class PluginUpdateManager(Star):
 
                 lines = [
                     format_update_report(
-                        check_result.updates, self.update_report_fields
+                        check_result.updates, self._get_update_report_fields()
                     )
                 ]
                 if succeeded_plugins:
@@ -725,148 +722,95 @@ class PluginUpdateManager(Star):
             lines.append("插件市场请求失败，市场插件本次未检查。")
         return "\n".join(lines)
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command(
-        "更新所有插件",
-        alias={"updateallplugins", "updateplugins", "更新全部插件"},
-    )
-    async def update_all_plugins_command(self, event: AstrMessageEvent):
-        logger.info("收到用户命令 '更新所有插件'。")
-        if self._update_lock.locked():
-            yield event.plain_result("已有一次插件更新检查正在执行，请稍后再试。")
-            return
+    def _get_update_report_fields(self) -> list[str]:
+        default_fields = ["display_name", "plugin_id", "version"]
+        configured_fields = self.config.get("update_report_fields", default_fields)
+        if not isinstance(configured_fields, list):
+            return default_fields
+        return [str(field).strip() for field in configured_fields if str(field).strip()]
 
-        yield event.plain_result("正在检查并更新所有插件，请稍候...")
-        result_message, need_to_restart = await self._check_and_perform_updates()
-        yield event.plain_result(result_message).use_t2i(False)
-        if need_to_restart:
-            await self.restart_command()
-
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command(
-        "检查astrbot更新",
-        alias={"checkastrbotupdates", "checkastrbot", "检查AstrBot更新"},
-    )
-    async def check_astrbot_update_command(self, event: AstrMessageEvent):
-        """检查 AstrBot 框架是否有可用更新。"""
-        logger.info("收到用户命令 '检查astrbot更新'。")
-        if not self.astrbot_update_enabled:
-            yield event.plain_result("AstrBot 框架更新功能已在插件配置中关闭。")
-            return
-        if self._update_lock.locked():
-            yield event.plain_result("已有更新任务正在执行，请稍后再试。")
-            return
-
-        yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
-        release = None
-        async with self._update_lock:
-            try:
-                dashboard = await self._get_dashboard_client()
-                update_info = await dashboard.check_astrbot_update(
-                    include_prerelease=self.astrbot_include_prerelease
-                )
-                current_version = str(update_info.get("version") or "未知版本")
-                if update_info.get("has_new_version"):
-                    release = update_info.get("target_release")
-                    if not isinstance(release, dict):
-                        try:
-                            release = await dashboard.get_astrbot_update_release(
-                                current_version,
-                                include_prerelease=self.astrbot_include_prerelease,
-                            )
-                        except Exception as exc:
-                            logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
-            except Exception as exc:
-                logger.error(f"检查 AstrBot 框架更新失败：{traceback.format_exc()}")
-                yield event.plain_result(f"检查 AstrBot 框架更新失败：{exc}")
-                return
-
-        if not update_info.get("has_new_version"):
-            yield event.plain_result(f"AstrBot 当前为 {current_version}，已经是最新版本。")
-            return
-
-        message = str(update_info.get("message") or "")
-        lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
-        target_version = str(
-            (release or {}).get("version") or update_info.get("target_version") or ""
-        ).strip()
-        if target_version:
-            if self.astrbot_include_prerelease:
-                lines.append(f"包含预发布版本的检查已开启，目标版本：{target_version}")
-            else:
-                lines.append(f"目标版本：{target_version}")
-        elif message:
-            lines.append(message)
-        if release:
-            notes = str(release.get("notes") or "").strip()
-            displayed_notes = truncate_text(notes, MAX_TOTAL_CHANGELOG_CHARS)
-            lines.append(
-                f"{target_version or '目标版本'} 更新日志：\n\n"
-                f"{displayed_notes or '本次发布未提供更新日志。'}"
+    def _get_local_plugin_preview_entries(self) -> list[dict[str, str]]:
+        entries: list[dict[str, str]] = []
+        for plugin in self.context.get_all_stars():
+            if bool(getattr(plugin, "reserved", False)):
+                continue
+            name = str(getattr(plugin, "name", "") or "").strip()
+            if not name:
+                continue
+            version = str(getattr(plugin, "version", "") or "").strip() or "未知"
+            entries.append(
+                {
+                    "name": name,
+                    "display_name": str(
+                        getattr(plugin, "display_name", "") or ""
+                    ).strip(),
+                    "version": version,
+                    "online_version": f"{version}（模拟更新）",
+                    "repository_url": str(getattr(plugin, "repo", "") or "").strip(),
+                    "author": str(getattr(plugin, "author", "") or "").strip(),
+                    "root_dir_name": str(
+                        getattr(plugin, "root_dir_name", "") or ""
+                    ).strip(),
+                }
             )
-        lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
-        result_text = "\n".join(lines)
-        if (
-            release
-            and len(str(release.get("notes") or ""))
-            > self.astrbot_changelog_forward_threshold
-        ):
-            NodeCls = getattr(Comp, "Node", None)
-            NodesCls = getattr(Comp, "Nodes", None)
-            if NodeCls and NodesCls:
-                try:
-                    nodes = [
-                        NodeCls(
-                            uin="0",
-                            name="AstrBot 更新日志",
-                            content=[Comp.Plain(text=result_text)],
+        return entries
+
+    def _build_update_report_preview(
+        self, entries: list[dict[str, str]] | None = None
+    ) -> str:
+        entries = entries if entries is not None else self._get_local_plugin_preview_entries()
+        if not entries:
+            return "本机没有可用于预览的已加载插件。"
+        return format_update_report(entries, self._get_update_report_fields())
+
+    async def _build_local_plugin_changelog_nodes(
+        self, entries: list[dict[str, str]]
+    ) -> list[str]:
+        plugin_dir_base = Path(__file__).resolve().parent.parent
+        node_texts: list[str] = []
+        for entry in entries:
+            display_name = entry.get("display_name") or entry["name"]
+            changelog_text = "本机未找到 CHANGELOG.md。"
+            root_dir_name = entry.get("root_dir_name", "")
+            if root_dir_name:
+                changelog_path = find_local_changelog(plugin_dir_base / root_dir_name)
+                if changelog_path:
+                    try:
+                        raw_text = await asyncio.to_thread(
+                            changelog_path.read_text,
+                            encoding="utf-8",
+                            errors="replace",
                         )
-                    ]
-                    yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)
-                    return
-                except Exception as exc:
-                    logger.warning(f"构造 AstrBot 更新日志合并转发失败，降级为文本：{exc}")
-        yield event.plain_result(result_text).use_t2i(False)
+                        changelog_text = (
+                            extract_latest_changelog(raw_text)
+                            or "CHANGELOG.md 中未找到可识别的版本小节。"
+                        )
+                    except Exception as exc:
+                        changelog_text = f"读取本机 CHANGELOG.md 失败：{exc}"
+            node_texts.append(
+                f"【{display_name}】\n当前版本：{entry['version']}\n\n"
+                f"{truncate_text(changelog_text, MAX_CHANGELOG_CHARS_PER_PLUGIN)}"
+            )
+        return node_texts
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command(
-        "更新astrbot",
-        alias={"updateastrbot", "astrbotupdate", "更新AstrBot"},
-    )
-    async def update_astrbot_command(self, event: AstrMessageEvent):
-        """通过 AstrBot Dashboard 更新框架、依赖并在成功后重启。"""
-        logger.info("收到用户命令 '更新astrbot'。")
-        if not self.astrbot_update_enabled:
-            yield event.plain_result("AstrBot 框架更新功能已在插件配置中关闭。")
-            return
-        if self._update_lock.locked():
-            yield event.plain_result("已有更新任务正在执行，请稍后再试。")
-            return
+    async def _build_latest_astrbot_changelog_node(self) -> str:
+        try:
+            dashboard = await self._get_dashboard_client()
+            release = await dashboard.get_astrbot_latest_release()
+        except Exception as exc:
+            logger.warning(f"获取最近一次 AstrBot 更新日志失败：{exc}")
+            return f"【AstrBot】\n\n获取最近一次更新日志失败：{exc}"
+        if not release:
+            return "【AstrBot】\n\n未获取到可用的发布更新日志。"
+        version = str(release.get("version") or "未知版本")
+        notes = str(release.get("notes") or "本次发布未提供更新日志。")
+        return truncate_text(
+            f"【AstrBot】\n最近一次发布：{version}\n\n{notes}",
+            MAX_TOTAL_CHANGELOG_CHARS,
+        )
 
-        yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
-        async with self._update_lock:
-            try:
-                result_message, need_to_restart, changelog = (
-                    await self._perform_astrbot_update()
-                )
-            except Exception as exc:
-                logger.error(f"更新 AstrBot 框架失败：{traceback.format_exc()}")
-                yield event.plain_result(f"更新 AstrBot 框架失败：{exc}")
-                return
 
-        if not need_to_restart:
-            yield event.plain_result(result_message)
-            return
 
-        if changelog:
-            await self._send_astrbot_changelog(changelog)
-        await self._save_pending_restart(event.unified_msg_origin)
-        error_message = await self.restart_command(notify_admin=False)
-        if error_message:
-            self._clear_pending_restart()
-            yield event.plain_result(error_message)
-            return
-        yield event.plain_result("AstrBot 更新完成，正在重启；启动完成后将发送回告。")
 
     async def _fetch_online_plugins(
         self, session: aiohttp.ClientSession
@@ -997,16 +941,6 @@ class PluginUpdateManager(Star):
             "download_url": download_url,
         }
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("重启astrbot", alias={"restartastrbot", "astrbotrestart"})
-    async def restart_astrbot_command(self, event: AstrMessageEvent):
-        logger.info("收到用户命令 '重启astrbot'。")
-        yield event.plain_result("正在重启，请稍候...")
-        await self._save_pending_restart(event.unified_msg_origin)
-        error_message = await self.restart_command(notify_admin=False)
-        if error_message:
-            self._clear_pending_restart()
-            yield event.plain_result(error_message)
 
     @staticmethod
     def _append_version_update(
@@ -1293,21 +1227,31 @@ class PluginUpdateManager(Star):
             [Comp.Plain(text=f"本次更新日志：\n\n{combined}")]
         )
 
+
+# ===== 管理命令：帮助 =====
     @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("测试插件更新日志", alias={"testpluginchangelog"})
-    async def test_plugin_changelog_command(self, event: AstrMessageEvent):
-        """向管理员发送模拟日志，用于确认合并转发的展示效果。"""
-        if not self.admin_sid_list:
-            yield event.plain_result("未配置管理员 SID，无法发送模拟插件更新日志。")
-            return
+    @filter.command("更新管理帮助", alias={"updatemanagerhelp"})
+    async def update_manager_help_command(self, event: AstrMessageEvent):
+        """返回插件全部管理员命令的分类帮助。"""
+        yield event.plain_result(
+            "插件更新管理帮助\n\n"
+            "【插件更新】\n"
+            "检查插件更新：仅检查可用更新。\n"
+            "更新所有插件：检查并更新全部符合条件的插件。\n"
+            "预览插件更新汇报：预览当前汇报字段配置。\n"
+            "测试插件日志：向管理员发送本机插件日志；框架更新开启时附加最近一次 AstrBot 发布日志。\n\n"
+            "【插件维护】\n"
+            "安装插件 <链接>：安装并加载插件。\n"
+            "重新安装插件 <插件名> [地址] [--no-proxy]：覆盖重装插件。\n"
+            "清除插件数据 <插件名> --confirm：清理插件持久化数据并重载。\n\n"
+            "【AstrBot 框架】\n"
+            "检查astrbot更新：检查框架可用更新。\n"
+            "更新astrbot：更新框架、依赖并重启。\n"
+            "重启astrbot：重启 AstrBot。"
+        ).use_t2i(False)
 
-        sample_logs = [
-            "【插件更新管理器】\nv2.7.1 → v2.7.2\n\n- 新增模拟更新日志测试指令\n- 优化更新通知展示",
-            "【示例 RSS 插件】\nv1.4.0 → v1.5.0\n\n- 新增订阅过滤规则\n- 修复推送失败重试",
-        ]
-        await self._try_send_changelog_forward(sample_logs)
-        yield event.plain_result("已向管理员发送模拟插件更新日志。")
 
+# ===== 管理命令：插件更新 =====
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("检查插件更新", alias={"checkpluginupdates", "checkplugins"})
     async def check_plugins_command(self, event: AstrMessageEvent):
@@ -1338,7 +1282,9 @@ class PluginUpdateManager(Star):
             return
 
         lines = [
-            format_update_report(check_result.updates, self.update_report_fields)
+            format_update_report(
+                check_result.updates, self._get_update_report_fields()
+            )
         ]
         if notes:
             lines.append(f"\n{notes}")
@@ -1346,6 +1292,57 @@ class PluginUpdateManager(Star):
             truncate_text("\n".join(lines), MAX_STATUS_MESSAGE_CHARS)
         ).use_t2i(False)
 
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(
+        "更新所有插件",
+        alias={"updateallplugins", "updateplugins", "更新全部插件"},
+    )
+    async def update_all_plugins_command(self, event: AstrMessageEvent):
+        logger.info("收到用户命令 '更新所有插件'。")
+        if self._update_lock.locked():
+            yield event.plain_result("已有一次插件更新检查正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result("正在检查并更新所有插件，请稍候...")
+        result_message, need_to_restart = await self._check_and_perform_updates()
+        yield event.plain_result(result_message).use_t2i(False)
+        if need_to_restart:
+            await self.restart_command()
+
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("预览插件更新汇报", alias={"previewpluginupdate"})
+    async def preview_plugin_update_report_command(self, event: AstrMessageEvent):
+        """在当前会话预览 update_report_fields 的实际效果。"""
+        yield event.plain_result(self._build_update_report_preview()).use_t2i(False)
+
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(
+        "测试插件日志",
+        alias={"testpluginchangelog", "测试插件更新日志"},
+    )
+    async def test_plugin_changelog_command(self, event: AstrMessageEvent):
+        """向管理员发送本机插件和 AstrBot 的最新日志。"""
+        if not self.admin_sid_list:
+            yield event.plain_result("未配置管理员 SID，无法发送测试插件日志。")
+            return
+
+        entries = self._get_local_plugin_preview_entries()
+        report_preview = self._build_update_report_preview(entries)
+        await self.send_message_to_admin(
+            [Comp.Plain(text=f"测试更新检查汇报：\n\n{report_preview}")]
+        )
+        node_texts = await self._build_local_plugin_changelog_nodes(entries)
+        if self.astrbot_update_enabled:
+            node_texts.append(await self._build_latest_astrbot_changelog_node())
+        if node_texts:
+            await self._try_send_changelog_forward(node_texts)
+        yield event.plain_result("已向管理员发送本机插件测试汇报和更新日志。")
+
+
+# ===== 管理命令：插件维护 =====
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("安装插件", alias={"installplugin", "plugininstall"})
     async def install_plugin_command(self, event: AstrMessageEvent):
@@ -1398,136 +1395,6 @@ class PluginUpdateManager(Star):
                 logger.error(f"安装插件失败：{traceback.format_exc()}")
                 yield event.plain_result(f"插件安装失败：{exc}")
 
-    @filter.permission_type(filter.PermissionType.ADMIN)
-    @filter.command("清除插件数据", alias={"clearplugindata", "clearplugin"})
-    async def clear_plugin_data_command(self, event: AstrMessageEvent):
-        """清除指定插件的 AstrBot 持久化数据，并重新加载插件。"""
-        parts = str(getattr(event, "message_str", "") or "").strip().split(
-            maxsplit=2
-        )
-        if len(parts) < 2 or not parts[1].strip():
-            yield event.plain_result(
-                "用法：清除插件数据 <插件名> --confirm\n"
-                "该操作会删除 AstrBot 管理的插件文件数据和 KV 数据，但保留用户配置文件。"
-            )
-            return
-
-        target_name = parts[1].strip()
-        confirmed = len(parts) == 3 and parts[2].strip() == "--confirm"
-        if not confirmed:
-            yield event.plain_result(
-                f"危险操作警告：将清除插件「{target_name}」的 AstrBot 持久化文件数据和 KV 数据。\n"
-                "AstrBot 用户配置文件不会删除，但插件数据目录和 KV 中可能含有用户录入内容，清除后不可恢复。\n"
-                "框架未管理的其他路径不会处理。\n"
-                f"确认操作请发送：清除插件数据 {target_name} --confirm"
-            )
-            return
-
-        target = None
-        get_registered_star = getattr(self.context, "get_registered_star", None)
-        if callable(get_registered_star):
-            target = get_registered_star(target_name)
-        if target is None:
-            candidates = [
-                plugin
-                for plugin in self.context.get_all_stars()
-                if str(getattr(plugin, "root_dir_name", "") or "").strip()
-                == target_name
-            ]
-            if len(candidates) == 1:
-                target = candidates[0]
-
-        if target is None:
-            yield event.plain_result(f"未找到已加载的插件：{target_name}")
-            return
-
-        plugin_name = str(getattr(target, "name", "") or "").strip()
-        root_dir_name = str(getattr(target, "root_dir_name", "") or "").strip()
-        if not plugin_name or not root_dir_name:
-            yield event.plain_result("目标插件信息不完整，未执行任何删除操作。")
-            return
-        if normalize_name(plugin_name) == normalize_name(PLUGIN_NAME):
-            yield event.plain_result("不能清除本插件自身的数据，未执行任何删除操作。")
-            return
-        if (
-            root_dir_name in {".", ".."}
-            or any(char in root_dir_name for char in ("/", "\\", ":"))
-        ):
-            yield event.plain_result("目标插件目录名不安全，未执行任何删除操作。")
-            return
-        if bool(getattr(target, "reserved", False)):
-            yield event.plain_result("不能清除 AstrBot 保留插件的数据，未执行任何删除操作。")
-            return
-
-        manager = getattr(self.context, "_star_manager", None)
-        cleanup_method = getattr(manager, "_cleanup_plugin_optional_artifacts", None)
-        reload_method = getattr(manager, "reload", None)
-        required_cleanup_params = {
-            "root_dir_name",
-            "plugin_label",
-            "plugin_id",
-            "delete_config",
-            "delete_data",
-        }
-        try:
-            cleanup_params = set(inspect.signature(cleanup_method).parameters)
-            reload_params = set(inspect.signature(reload_method).parameters)
-        except (TypeError, ValueError, AttributeError):
-            cleanup_params = set()
-            reload_params = set()
-        if (
-            not callable(cleanup_method)
-            or not callable(reload_method)
-            or not required_cleanup_params.issubset(cleanup_params)
-            or "specified_plugin_name" not in reload_params
-        ):
-            yield event.plain_result(
-                "当前 AstrBot 版本没有可验证的数据清理或插件重载接口，未执行任何删除操作。"
-            )
-            return
-
-        if self._update_lock.locked():
-            yield event.plain_result("已有一次插件更新、安装或数据清理正在执行，请稍后再试。")
-            return
-
-        yield event.plain_result(
-            f"已确认，正在清除插件「{plugin_name}」的数据并重载插件，请稍候..."
-        )
-        async with self._update_lock:
-            try:
-                await cleanup_method(
-                    root_dir_name=root_dir_name,
-                    plugin_label=plugin_name,
-                    plugin_id=str(getattr(target, "plugin_id", "") or "") or None,
-                    delete_config=False,
-                    delete_data=True,
-                )
-                reload_result = await reload_method(specified_plugin_name=plugin_name)
-                reload_ok = (
-                    bool(reload_result[0])
-                    if isinstance(reload_result, tuple) and reload_result
-                    else reload_result is not False
-                )
-                if not reload_ok:
-                    detail = (
-                        reload_result[1]
-                        if isinstance(reload_result, tuple) and len(reload_result) > 1
-                        else "未知错误"
-                    )
-                    yield event.plain_result(
-                        f"插件「{plugin_name}」的数据清理已执行，但重载失败：{detail}\n"
-                        "用户配置文件未删除，请手动检查插件状态。"
-                    )
-                    return
-                yield event.plain_result(
-                    f"插件「{plugin_name}」的 AstrBot 持久化数据清理已执行，用户配置文件未删除，插件已重载。"
-                ).use_t2i(False)
-            except Exception as exc:
-                logger.error(f"清除插件 {plugin_name} 数据失败：{traceback.format_exc()}")
-                yield event.plain_result(
-                    f"清除插件「{plugin_name}」数据或重载失败：{exc}\n"
-                    "未执行配置文件删除，请手动检查插件状态。"
-                )
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("重新安装插件", alias={"reinstallplugin", "reinstall"})
@@ -1734,3 +1601,276 @@ class PluginUpdateManager(Star):
         except Exception as exc:
             logger.error(f"重新安装插件 {plugin_name} 失败：{traceback.format_exc()}")
             yield event.plain_result(f"重新安装插件 {plugin_name} 失败：{exc}")
+
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("清除插件数据", alias={"clearplugindata", "clearplugin"})
+    async def clear_plugin_data_command(self, event: AstrMessageEvent):
+        """清除指定插件的 AstrBot 持久化数据，并重新加载插件。"""
+        parts = str(getattr(event, "message_str", "") or "").strip().split(
+            maxsplit=2
+        )
+        if len(parts) < 2 or not parts[1].strip():
+            yield event.plain_result(
+                "用法：清除插件数据 <插件名> --confirm\n"
+                "该操作会删除 AstrBot 管理的插件文件数据和 KV 数据，但保留用户配置文件。"
+            )
+            return
+
+        target_name = parts[1].strip()
+        confirmed = len(parts) == 3 and parts[2].strip() == "--confirm"
+        if not confirmed:
+            yield event.plain_result(
+                f"危险操作警告：将清除插件「{target_name}」的 AstrBot 持久化文件数据和 KV 数据。\n"
+                "AstrBot 用户配置文件不会删除，但插件数据目录和 KV 中可能含有用户录入内容，清除后不可恢复。\n"
+                "框架未管理的其他路径不会处理。\n"
+                f"确认操作请发送：清除插件数据 {target_name} --confirm"
+            )
+            return
+
+        target = None
+        get_registered_star = getattr(self.context, "get_registered_star", None)
+        if callable(get_registered_star):
+            target = get_registered_star(target_name)
+        if target is None:
+            candidates = [
+                plugin
+                for plugin in self.context.get_all_stars()
+                if str(getattr(plugin, "root_dir_name", "") or "").strip()
+                == target_name
+            ]
+            if len(candidates) == 1:
+                target = candidates[0]
+
+        if target is None:
+            yield event.plain_result(f"未找到已加载的插件：{target_name}")
+            return
+
+        plugin_name = str(getattr(target, "name", "") or "").strip()
+        root_dir_name = str(getattr(target, "root_dir_name", "") or "").strip()
+        if not plugin_name or not root_dir_name:
+            yield event.plain_result("目标插件信息不完整，未执行任何删除操作。")
+            return
+        if normalize_name(plugin_name) == normalize_name(PLUGIN_NAME):
+            yield event.plain_result("不能清除本插件自身的数据，未执行任何删除操作。")
+            return
+        if (
+            root_dir_name in {".", ".."}
+            or any(char in root_dir_name for char in ("/", "\\", ":"))
+        ):
+            yield event.plain_result("目标插件目录名不安全，未执行任何删除操作。")
+            return
+        if bool(getattr(target, "reserved", False)):
+            yield event.plain_result("不能清除 AstrBot 保留插件的数据，未执行任何删除操作。")
+            return
+
+        manager = getattr(self.context, "_star_manager", None)
+        cleanup_method = getattr(manager, "_cleanup_plugin_optional_artifacts", None)
+        reload_method = getattr(manager, "reload", None)
+        required_cleanup_params = {
+            "root_dir_name",
+            "plugin_label",
+            "plugin_id",
+            "delete_config",
+            "delete_data",
+        }
+        try:
+            cleanup_params = set(inspect.signature(cleanup_method).parameters)
+            reload_params = set(inspect.signature(reload_method).parameters)
+        except (TypeError, ValueError, AttributeError):
+            cleanup_params = set()
+            reload_params = set()
+        if (
+            not callable(cleanup_method)
+            or not callable(reload_method)
+            or not required_cleanup_params.issubset(cleanup_params)
+            or "specified_plugin_name" not in reload_params
+        ):
+            yield event.plain_result(
+                "当前 AstrBot 版本没有可验证的数据清理或插件重载接口，未执行任何删除操作。"
+            )
+            return
+
+        if self._update_lock.locked():
+            yield event.plain_result("已有一次插件更新、安装或数据清理正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result(
+            f"已确认，正在清除插件「{plugin_name}」的数据并重载插件，请稍候..."
+        )
+        async with self._update_lock:
+            try:
+                await cleanup_method(
+                    root_dir_name=root_dir_name,
+                    plugin_label=plugin_name,
+                    plugin_id=str(getattr(target, "plugin_id", "") or "") or None,
+                    delete_config=False,
+                    delete_data=True,
+                )
+                reload_result = await reload_method(specified_plugin_name=plugin_name)
+                reload_ok = (
+                    bool(reload_result[0])
+                    if isinstance(reload_result, tuple) and reload_result
+                    else reload_result is not False
+                )
+                if not reload_ok:
+                    detail = (
+                        reload_result[1]
+                        if isinstance(reload_result, tuple) and len(reload_result) > 1
+                        else "未知错误"
+                    )
+                    yield event.plain_result(
+                        f"插件「{plugin_name}」的数据清理已执行，但重载失败：{detail}\n"
+                        "用户配置文件未删除，请手动检查插件状态。"
+                    )
+                    return
+                yield event.plain_result(
+                    f"插件「{plugin_name}」的 AstrBot 持久化数据清理已执行，用户配置文件未删除，插件已重载。"
+                ).use_t2i(False)
+            except Exception as exc:
+                logger.error(f"清除插件 {plugin_name} 数据失败：{traceback.format_exc()}")
+                yield event.plain_result(
+                    f"清除插件「{plugin_name}」数据或重载失败：{exc}\n"
+                    "未执行配置文件删除，请手动检查插件状态。"
+                )
+
+
+# ===== 管理命令：AstrBot 框架 =====
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(
+        "检查astrbot更新",
+        alias={"checkastrbotupdates", "checkastrbot", "检查AstrBot更新"},
+    )
+    async def check_astrbot_update_command(self, event: AstrMessageEvent):
+        """检查 AstrBot 框架是否有可用更新。"""
+        logger.info("收到用户命令 '检查astrbot更新'。")
+        if not self.astrbot_update_enabled:
+            yield event.plain_result("AstrBot 框架更新功能已在插件配置中关闭。")
+            return
+        if self._update_lock.locked():
+            yield event.plain_result("已有更新任务正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
+        release = None
+        async with self._update_lock:
+            try:
+                dashboard = await self._get_dashboard_client()
+                update_info = await dashboard.check_astrbot_update(
+                    include_prerelease=self.astrbot_include_prerelease
+                )
+                current_version = str(update_info.get("version") or "未知版本")
+                if update_info.get("has_new_version"):
+                    release = update_info.get("target_release")
+                    if not isinstance(release, dict):
+                        try:
+                            release = await dashboard.get_astrbot_update_release(
+                                current_version,
+                                include_prerelease=self.astrbot_include_prerelease,
+                            )
+                        except Exception as exc:
+                            logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
+            except Exception as exc:
+                logger.error(f"检查 AstrBot 框架更新失败：{traceback.format_exc()}")
+                yield event.plain_result(f"检查 AstrBot 框架更新失败：{exc}")
+                return
+
+        if not update_info.get("has_new_version"):
+            yield event.plain_result(f"AstrBot 当前为 {current_version}，已经是最新版本。")
+            return
+
+        message = str(update_info.get("message") or "")
+        lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
+        target_version = str(
+            (release or {}).get("version") or update_info.get("target_version") or ""
+        ).strip()
+        if target_version:
+            if self.astrbot_include_prerelease:
+                lines.append(f"包含预发布版本的检查已开启，目标版本：{target_version}")
+            else:
+                lines.append(f"目标版本：{target_version}")
+        elif message:
+            lines.append(message)
+        if release:
+            notes = str(release.get("notes") or "").strip()
+            displayed_notes = truncate_text(notes, MAX_TOTAL_CHANGELOG_CHARS)
+            lines.append(
+                f"{target_version or '目标版本'} 更新日志：\n\n"
+                f"{displayed_notes or '本次发布未提供更新日志。'}"
+            )
+        lines.append("发送“更新astrbot”即可下载、更新依赖并重启。")
+        result_text = "\n".join(lines)
+        if (
+            release
+            and len(str(release.get("notes") or ""))
+            > self.astrbot_changelog_forward_threshold
+        ):
+            NodeCls = getattr(Comp, "Node", None)
+            NodesCls = getattr(Comp, "Nodes", None)
+            if NodeCls and NodesCls:
+                try:
+                    nodes = [
+                        NodeCls(
+                            uin="0",
+                            name="AstrBot 更新日志",
+                            content=[Comp.Plain(text=result_text)],
+                        )
+                    ]
+                    yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)
+                    return
+                except Exception as exc:
+                    logger.warning(f"构造 AstrBot 更新日志合并转发失败，降级为文本：{exc}")
+        yield event.plain_result(result_text).use_t2i(False)
+
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command(
+        "更新astrbot",
+        alias={"updateastrbot", "astrbotupdate", "更新AstrBot"},
+    )
+    async def update_astrbot_command(self, event: AstrMessageEvent):
+        """通过 AstrBot Dashboard 更新框架、依赖并在成功后重启。"""
+        logger.info("收到用户命令 '更新astrbot'。")
+        if not self.astrbot_update_enabled:
+            yield event.plain_result("AstrBot 框架更新功能已在插件配置中关闭。")
+            return
+        if self._update_lock.locked():
+            yield event.plain_result("已有更新任务正在执行，请稍后再试。")
+            return
+
+        yield event.plain_result("正在检查 AstrBot 框架更新，请稍候...")
+        async with self._update_lock:
+            try:
+                result_message, need_to_restart, changelog = (
+                    await self._perform_astrbot_update()
+                )
+            except Exception as exc:
+                logger.error(f"更新 AstrBot 框架失败：{traceback.format_exc()}")
+                yield event.plain_result(f"更新 AstrBot 框架失败：{exc}")
+                return
+
+        if not need_to_restart:
+            yield event.plain_result(result_message)
+            return
+
+        if changelog:
+            await self._send_astrbot_changelog(changelog)
+        await self._save_pending_restart(event.unified_msg_origin)
+        error_message = await self.restart_command(notify_admin=False)
+        if error_message:
+            self._clear_pending_restart()
+            yield event.plain_result(error_message)
+            return
+        yield event.plain_result("AstrBot 更新完成，正在重启；启动完成后将发送回告。")
+
+
+    @filter.permission_type(filter.PermissionType.ADMIN)
+    @filter.command("重启astrbot", alias={"restartastrbot", "astrbotrestart"})
+    async def restart_astrbot_command(self, event: AstrMessageEvent):
+        logger.info("收到用户命令 '重启astrbot'。")
+        yield event.plain_result("正在重启，请稍候...")
+        await self._save_pending_restart(event.unified_msg_origin)
+        error_message = await self.restart_command(notify_admin=False)
+        if error_message:
+            self._clear_pending_restart()
+            yield event.plain_result(error_message)

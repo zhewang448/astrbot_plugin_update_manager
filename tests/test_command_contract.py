@@ -19,7 +19,7 @@ class PluginDataCleanupCommandContractTests(unittest.TestCase):
         decorators = [ast.unparse(item) for item in self.command.decorator_list]
         self.assertIn("filter.permission_type(filter.PermissionType.ADMIN)", decorators)
         self.assertIn(
-            "filter.command('清除插件数据', alias={'clearplugindata'})",
+            "filter.command('清除插件数据', alias={'clearplugindata', 'clearplugin'})",
             decorators,
         )
         self.assertIn("--confirm", ast.unparse(self.command))
@@ -112,13 +112,88 @@ class TestPluginChangelogCommandContractTests(unittest.TestCase):
         source = ast.unparse(self.command)
         self.assertIn("filter.permission_type(filter.PermissionType.ADMIN)", decorators)
         self.assertIn(
-            "filter.command('测试插件更新日志', alias={'testpluginchangelog'})",
+            "filter.command('测试插件日志', alias={'testpluginchangelog', '测试插件更新日志'})",
             decorators,
         )
-        self.assertIn("if not self.admin_sid_list", source)
-        self.assertIn("await self._try_send_changelog_forward(sample_logs)", source)
-        self.assertIn("【插件更新管理器】", source)
-        self.assertIn("【示例 RSS 插件】", source)
+        self.assertIn("entries = self._get_local_plugin_preview_entries()", source)
+        self.assertIn("report_preview = self._build_update_report_preview(entries)", source)
+        self.assertIn("await self._build_local_plugin_changelog_nodes(entries)", source)
+        self.assertIn("if self.astrbot_update_enabled", source)
+        self.assertIn("await self._build_latest_astrbot_changelog_node()", source)
+        self.assertIn("await self.send_message_to_admin", source)
+        self.assertIn("await self._try_send_changelog_forward(node_texts)", source)
+
+
+class PreviewPluginUpdateReportCommandContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        cls.command = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "preview_plugin_update_report_command"
+        )
+
+    def test_preview_command_is_admin_only_and_uses_current_configuration(self):
+        decorators = [ast.unparse(item) for item in self.command.decorator_list]
+        source = ast.unparse(self.command)
+        self.assertIn("filter.permission_type(filter.PermissionType.ADMIN)", decorators)
+        self.assertIn(
+            "filter.command('预览插件更新汇报', alias={'previewpluginupdate'})",
+            decorators,
+        )
+        self.assertIn("self._build_update_report_preview()", source)
+
+
+class UpdateManagerHelpCommandContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        cls.command = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef)
+            and node.name == "update_manager_help_command"
+        )
+
+    def test_help_command_lists_all_categories(self):
+        decorators = [ast.unparse(item) for item in self.command.decorator_list]
+        source = ast.unparse(self.command)
+        self.assertIn("filter.command('更新管理帮助', alias={'updatemanagerhelp'})", decorators)
+        self.assertIn('【插件更新】', source)
+        self.assertIn('【插件维护】', source)
+        self.assertIn('【AstrBot 框架】', source)
+
+
+class CommandOrderingContractTests(unittest.TestCase):
+    def test_commands_are_grouped_by_category_and_logical_order(self):
+        source_path = Path(__file__).resolve().parents[1] / "main.py"
+        tree = ast.parse(source_path.read_text(encoding="utf-8"))
+        expected_order = [
+            "update_manager_help_command",
+            "check_plugins_command",
+            "update_all_plugins_command",
+            "preview_plugin_update_report_command",
+            "test_plugin_changelog_command",
+            "install_plugin_command",
+            "reinstall_plugin_command",
+            "clear_plugin_data_command",
+            "check_astrbot_update_command",
+            "update_astrbot_command",
+            "restart_astrbot_command",
+        ]
+        commands = {
+            node.name: node.lineno
+            for node in ast.walk(tree)
+            if isinstance(node, ast.AsyncFunctionDef) and node.name in expected_order
+        }
+        self.assertEqual(
+            [name for name, _ in sorted(commands.items(), key=lambda item: item[1])],
+            expected_order,
+        )
 
 
 class ManualRestartCompletionNotificationContractTests(unittest.TestCase):

@@ -74,60 +74,68 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.7.3",
+    "2.8.0",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
+        self._config_migrated = False
 
-        self.schedule_mode = self.config.get("schedule_mode", "interval")
-        self.interval_hours = self.config.get("interval_hours", 24)
-        self.check_weekdays = self.config.get(
+        self._migrate_legacy_config()
+
+        plugin_config = self._config_section("plugin_updates")
+        framework_config = self._config_section("framework_updates")
+        notification_config = self._config_section("notifications")
+        network_config = self._config_section("network")
+        debug_config = self._config_section("debug")
+
+        self.schedule_mode = plugin_config.get("schedule_mode", "interval")
+        self.interval_hours = plugin_config.get("interval_hours", 24)
+        self.check_weekdays = plugin_config.get(
             "check_weekdays", ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
         )
-        self.check_times = self.config.get("check_times", ["04:00"])
-        self.check_on_startup = self.config.get("check_on_startup", False)
-        self.plugin_auto_update = self.config.get("plugin_auto_update", True)
-        self.proxy_address = str(self.config.get("github_proxy", "") or "").strip()
-        self.github_token = str(self.config.get("github_token", "") or "").strip()
-        self.test_mode = self.config.get("test_mode", False)
-        self.black_plugin_list = list(self.config.get("black_plugin_list", []) or [])
-        self.white_plugin_list = list(self.config.get("white_plugin_list", []) or [])
-        self.admin_sid_list = list(self.config.get("admin_sid_list", []) or [])
-        self.restart_mode = self.config.get("restart_mode", False)
-        self.astrbot_update_enabled = self.config.get("astrbot_update_enabled", True)
-        self.astrbot_include_prerelease = self.config.get(
-            "astrbot_include_prerelease", False
+        self.check_times = plugin_config.get("check_times", ["04:00"])
+        self.check_on_startup = plugin_config.get("check_on_startup", False)
+        self.plugin_auto_update = plugin_config.get("auto_update", True)
+        self.proxy_address = str(network_config.get("github_proxy", "") or "").strip()
+        self.github_token = str(network_config.get("github_token", "") or "").strip()
+        self.test_mode = debug_config.get("test_mode", False)
+        self.black_plugin_list = list(plugin_config.get("black_plugin_list", []) or [])
+        self.white_plugin_list = list(plugin_config.get("white_plugin_list", []) or [])
+        self.admin_sid_list = list(notification_config.get("admin_sid_list", []) or [])
+        self.restart_mode = plugin_config.get("restart_mode", False)
+        self.astrbot_update_enabled = framework_config.get("enabled", True)
+        self.astrbot_include_prerelease = framework_config.get(
+            "include_prerelease", False
         )
-        self.astrbot_send_changelog_to_admin = self.config.get(
-            "astrbot_send_changelog_to_admin", True
+        self.astrbot_send_changelog_to_admin = framework_config.get(
+            "send_changelog_to_admin", True
         )
         try:
             self.astrbot_changelog_forward_threshold = max(
                 0,
-                int(self.config.get("astrbot_changelog_forward_threshold", 100)),
+                int(framework_config.get("changelog_forward_threshold", 100)),
             )
         except (TypeError, ValueError):
             self.astrbot_changelog_forward_threshold = 100
-        self.astrbot_auto_update = self.config.get("astrbot_auto_update", False)
-        self.astrbot_schedule_mode = self.config.get(
-            "astrbot_schedule_mode", "interval"
-        )
-        self.astrbot_interval_hours = self.config.get("astrbot_interval_hours", 24)
-        self.astrbot_check_weekdays = self.config.get(
-            "astrbot_check_weekdays",
+        self.astrbot_auto_update = framework_config.get("schedule_enabled", False)
+        self.astrbot_framework_auto_update = framework_config.get("auto_update", True)
+        self.astrbot_schedule_mode = framework_config.get("schedule_mode", "interval")
+        self.astrbot_interval_hours = framework_config.get("interval_hours", 24)
+        self.astrbot_check_weekdays = framework_config.get(
+            "check_weekdays",
             ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
         )
-        self.astrbot_check_times = self.config.get("astrbot_check_times", ["04:00"])
-        self.astrbot_check_on_startup = self.config.get(
-            "astrbot_check_on_startup", False
-        )
-        self.custom_plugin_sources = list(
-            self.config.get("custom_plugin_sources", []) or []
-        )
-        self.send_changelog_to_admin = self.config.get(
-            "send_changelog_to_admin", False
+        self.astrbot_check_times = framework_config.get("check_times", ["04:00"])
+        self.astrbot_check_on_startup = framework_config.get("check_on_startup", False)
+        self.custom_plugin_sources = list(plugin_config.get("custom_plugin_sources", []) or [])
+        self.send_changelog_to_admin = plugin_config.get("send_changelog_to_admin", False)
+        self.update_report_fields = list(
+            notification_config.get(
+                "update_report_fields", ["display_name", "plugin_id", "version"]
+            )
+            or []
         )
         self._http_cache = BoundedCache(max_entries=128)
 
@@ -144,6 +152,90 @@ class PluginUpdateManager(Star):
 
         if self.proxy_address:
             logger.info(f"使用 GitHub 代理：{self.proxy_address}")
+
+    def _config_section(self, name: str) -> dict[str, Any]:
+        section = self.config.get(name)
+        return section if isinstance(section, dict) else {}
+
+    def _migrate_legacy_config(self) -> None:
+        """把旧版扁平配置迁移到分组配置，兼容已存在的插件配置文件。"""
+        sections = {
+            "plugin_updates": {
+                "schedule_mode": ("schedule_mode", "interval"),
+                "interval_hours": ("interval_hours", 24),
+                "check_weekdays": (
+                    "check_weekdays",
+                    ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                ),
+                "check_times": ("check_times", ["04:00"]),
+                "check_on_startup": ("check_on_startup", False),
+                "auto_update": ("plugin_auto_update", True),
+                "custom_plugin_sources": ("custom_plugin_sources", []),
+                "white_plugin_list": ("white_plugin_list", []),
+                "black_plugin_list": ("black_plugin_list", []),
+                "restart_mode": ("restart_mode", False),
+                "send_changelog_to_admin": ("send_changelog_to_admin", False),
+            },
+            "framework_updates": {
+                "enabled": ("astrbot_update_enabled", True),
+                "include_prerelease": ("astrbot_include_prerelease", False),
+                "changelog_forward_threshold": (
+                    "astrbot_changelog_forward_threshold",
+                    100,
+                ),
+                "send_changelog_to_admin": (
+                    "astrbot_send_changelog_to_admin",
+                    True,
+                ),
+                "schedule_enabled": ("astrbot_auto_update", False),
+                "auto_update": ("astrbot_auto_update_mode", True),
+                "schedule_mode": ("astrbot_schedule_mode", "interval"),
+                "interval_hours": ("astrbot_interval_hours", 24),
+                "check_weekdays": (
+                    "astrbot_check_weekdays",
+                    ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+                ),
+                "check_times": ("astrbot_check_times", ["04:00"]),
+                "check_on_startup": ("astrbot_check_on_startup", False),
+            },
+            "notifications": {
+                "admin_sid_list": ("admin_sid_list", []),
+                "update_report_fields": (
+                    "update_report_fields",
+                    ["display_name", "plugin_id", "version"],
+                ),
+            },
+            "network": {
+                "github_proxy": ("github_proxy", ""),
+                "github_token": ("github_token", ""),
+            },
+            "debug": {"test_mode": ("test_mode", False)},
+        }
+
+        for section_name, fields in sections.items():
+            section = self.config.get(section_name)
+            if not isinstance(section, dict):
+                section = {}
+                self.config[section_name] = section
+                self._config_migrated = True
+            for new_key, (legacy_key, default) in fields.items():
+                new_value = section.get(new_key, default)
+                legacy_value = self.config.get(legacy_key, default)
+                if new_value == default and legacy_value != default:
+                    section[new_key] = legacy_value
+                    new_value = legacy_value
+                    self._config_migrated = True
+                if legacy_key in self.config and legacy_value != default:
+                    self.config[legacy_key] = default
+                    self._config_migrated = True
+
+        if self._config_migrated:
+            save_config = getattr(self.config, "save_config", None)
+            if callable(save_config):
+                try:
+                    save_config()
+                except Exception as exc:
+                    logger.warning(f"更新管理器配置迁移后保存失败：{exc}")
 
     async def initialize(self):
         self._refresh_plugin_list_schema()
@@ -412,27 +504,39 @@ class PluginUpdateManager(Star):
         options = sorted(labels_by_name, key=str.casefold)
         labels = [labels_by_name[name] for name in options]
         for key in ("white_plugin_list", "black_plugin_list"):
-            item_schema = schema.get(key)
-            if isinstance(item_schema, dict):
-                item_schema["options"] = options
-                item_schema["labels"] = labels
+            item_schemas = [schema.get(key)]
+            plugin_schema = schema.get("plugin_updates")
+            if isinstance(plugin_schema, dict):
+                plugin_items = plugin_schema.get("items")
+                if isinstance(plugin_items, dict):
+                    item_schemas.append(plugin_items.get(key))
+            for item_schema in item_schemas:
+                if isinstance(item_schema, dict):
+                    item_schema["options"] = options
+                    item_schema["labels"] = labels
 
-        custom_schema = schema.get("custom_plugin_sources")
-        if not isinstance(custom_schema, dict):
-            return
-        templates = custom_schema.get("templates")
-        if not isinstance(templates, dict):
-            return
-        github_template = templates.get("github_metadata")
-        if not isinstance(github_template, dict):
-            return
-        template_items = github_template.get("items")
-        if not isinstance(template_items, dict):
-            return
-        plugin_item = template_items.get("plugin")
-        if isinstance(plugin_item, dict):
-            plugin_item["options"] = options
-            plugin_item["labels"] = labels
+        custom_schemas = [schema.get("custom_plugin_sources")]
+        plugin_schema = schema.get("plugin_updates")
+        if isinstance(plugin_schema, dict):
+            plugin_items = plugin_schema.get("items")
+            if isinstance(plugin_items, dict):
+                custom_schemas.append(plugin_items.get("custom_plugin_sources"))
+        for custom_schema in custom_schemas:
+            if not isinstance(custom_schema, dict):
+                continue
+            templates = custom_schema.get("templates")
+            if not isinstance(templates, dict):
+                continue
+            github_template = templates.get("github_metadata")
+            if not isinstance(github_template, dict):
+                continue
+            template_items = github_template.get("items")
+            if not isinstance(template_items, dict):
+                continue
+            plugin_item = template_items.get("plugin")
+            if isinstance(plugin_item, dict):
+                plugin_item["options"] = options
+                plugin_item["labels"] = labels
 
     @_compatible_filter_hook("on_plugin_loaded")
     async def on_plugin_loaded(self, metadata):
@@ -474,9 +578,14 @@ class PluginUpdateManager(Star):
         logger.info("AstrBot 定时更新：正在检查框架更新...")
         try:
             async with self._update_lock:
-                result_message, need_to_restart, changelog = (
-                    await self._perform_astrbot_update()
-                )
+                if self.astrbot_framework_auto_update:
+                    result_message, need_to_restart, changelog = (
+                        await self._perform_astrbot_update()
+                    )
+                else:
+                    result_message = await self._check_astrbot_update_only()
+                    need_to_restart = False
+                    changelog = ""
         except Exception as exc:
             logger.error(f"AstrBot 定时更新失败：{traceback.format_exc()}")
             result_message = f"AstrBot 定时更新失败：{exc}"
@@ -488,6 +597,43 @@ class PluginUpdateManager(Star):
             await self._send_astrbot_changelog(changelog)
         if need_to_restart:
             await self.restart_command()
+
+    async def _check_astrbot_update_only(self) -> str:
+        """仅检查 AstrBot 框架更新并生成通知，不启动更新任务。"""
+        dashboard = await self._get_dashboard_client()
+        update_info = await dashboard.check_astrbot_update(
+            include_prerelease=self.astrbot_include_prerelease
+        )
+        current_version = str(update_info.get("version") or "未知版本")
+        if not update_info.get("has_new_version"):
+            return f"AstrBot 当前为 {current_version}，已经是最新版本。"
+
+        target_version = str(update_info.get("target_version") or "").strip()
+        release = update_info.get("target_release")
+        if not isinstance(release, dict):
+            release = None
+        if release is None and self.astrbot_send_changelog_to_admin:
+            try:
+                release = await dashboard.get_astrbot_update_release(
+                    current_version,
+                    include_prerelease=self.astrbot_include_prerelease,
+                )
+            except Exception as exc:
+                logger.warning(f"获取 AstrBot 更新日志失败：{exc}")
+        if release:
+            target_version = str(release.get("version") or target_version).strip()
+
+        lines = [f"AstrBot 当前为 {current_version}，发现可用更新。"]
+        if target_version:
+            lines.append(f"目标版本：{target_version}")
+        if release:
+            notes = truncate_text(
+                str(release.get("notes") or "本次发布未提供更新日志。"),
+                MAX_TOTAL_CHANGELOG_CHARS,
+            )
+            lines.append(f"目标版本更新日志：\n\n{notes}")
+        lines.append("当前为仅检查模式，未执行更新或重启。")
+        return truncate_text("\n".join(lines), MAX_STATUS_MESSAGE_CHARS)
 
     async def send_message_to_admin(self, msg_components):
         for admin in self.admin_sid_list:
@@ -753,7 +899,7 @@ class PluginUpdateManager(Star):
 
     def _get_update_report_fields(self) -> list[str]:
         default_fields = ["display_name", "plugin_id", "version"]
-        configured_fields = self.config.get("update_report_fields", default_fields)
+        configured_fields = self.update_report_fields
         if not isinstance(configured_fields, list):
             return default_fields
         return [str(field).strip() for field in configured_fields if str(field).strip()]
@@ -1327,7 +1473,7 @@ class PluginUpdateManager(Star):
         yield event.plain_result(f"测试更新检查汇报：\n\n{report}").use_t2i(False)
 
         node_texts = await self._build_local_plugin_changelog_nodes(entries)
-        if bool(self.config.get("astrbot_update_enabled", True)):
+        if self.astrbot_update_enabled:
             node_texts.append(await self._build_latest_astrbot_changelog_node())
         if not node_texts:
             yield event.plain_result("本机没有可用于测试日志的已加载插件。")

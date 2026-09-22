@@ -29,7 +29,7 @@
 - **更新结果通知**：可向指定管理员会话发送检查和更新摘要。
 - **更新日志通知**：更新成功后自动读取各插件本地 CHANGELOG，以合并转发消息发送给管理员。
 - **更新后自动重启**：支持在更新成功后通过 AstrBot 本地 Dashboard 接口重启核心。
-- **GitHub 代理支持**：`github_proxy` 加速地址作用于自定义源的 zip 下载地址。
+- **GitHub 代理支持**：`network.github_proxy` 加速地址作用于自定义源的 zip 下载地址。
 - **自定义 GitHub 更新源**：可为未上架插件市场的本地插件绑定仓库，通过远端 `metadata.yaml` 检查版本。
 
 ## 安装
@@ -64,7 +64,7 @@
 更新astrbot
 ```
 
-框架更新复用本机 AstrBot Dashboard 的原生更新服务：先下载并校验 WebUI 与核心包，再更新 `requirements.txt` 依赖。插件持续查询该服务的进度；任务成功后才发起重启，并在框架再次启动后向原会话发送完成回告。`astrbot_send_changelog_to_admin` 开启时，更新成功会将对应 AstrBot 发布版本的更新日志发送到 `admin_sid_list`。
+框架更新复用本机 AstrBot Dashboard 的原生更新服务：先下载并校验 WebUI 与核心包，再更新 `requirements.txt` 依赖。插件持续查询该服务的进度；任务成功后才发起重启，并在框架再次启动后向原会话发送完成回告。`framework_updates.send_changelog_to_admin` 开启时，更新成功会将对应 AstrBot 发布版本的更新日志发送到 `notifications.admin_sid_list`。
 
 `更新astrbot` 会先检查可用更新；当前版本已是最新时直接返回结果，不会启动更新任务。`astrbot_include_prerelease` 默认关闭，开启后会把高于当前版本的预发布版本纳入检查，并使用选中的版本标签更新。框架更新日志会限制在 6000 字内；超过 `astrbot_changelog_forward_threshold`（默认 100 字）时，`检查astrbot更新` 使用合并转发消息回复，`更新astrbot` 和定时框架更新则以合并转发通知管理员。`更新所有插件` 保持只更新插件，不会隐式更新 AstrBot 框架。关闭 `astrbot_update_enabled` 后，框架检查、手动更新与定时框架更新都会停止，但 `重启astrbot` 仍可使用。框架更新不支持的启动模式或 Desktop 托管后端会直接返回 AstrBot 原生的状态说明。
 
@@ -133,7 +133,7 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 重新安装插件 astrbot_plugin_demo https://github.com/owner/repo --no-proxy
 ```
 
-默认会使用配置的 `github_proxy` 加速，加 `--no-proxy` 可禁用（适合加速服务不稳定或访问内网地址时）。
+默认会使用配置的 `network.github_proxy` 加速，加 `--no-proxy` 可禁用（适合加速服务不稳定或访问内网地址时）。
 
 **说明**：
 
@@ -145,76 +145,55 @@ AstrBot 的插件持久化数据不属于用户配置：插件可使用 `PluginK
 
 ### 方式 1：固定间隔
 
-AstrBot 启动后每隔 `interval_hours` 小时检查插件更新：
+AstrBot 启动后按“插件更新”配置组中的时间表检查插件更新：
 
 - 默认值为 24。
 - 支持浮点数。
 - 设置为 0 时关闭定时检查。
-- 老配置没有 `schedule_mode` 时默认使用此方式。
+- 老配置中的 `schedule_mode` 等扁平字段会自动迁移到 `plugin_updates` 配置组。
 
 ### 方式 2：指定星期和时间
 
 适合希望在固定时刻检查插件更新的场景：
 
-- `check_weekdays`：选择星期一至星期日，可多选。
-- `check_times`：填写一个或多个 24 小时制时间，例如 `04:00`、`16:30`。
-- `check_on_startup`：是否在 AstrBot 启动后额外检查一次。
+- `plugin_updates.check_weekdays`：选择星期一至星期日，可多选。
+- `plugin_updates.check_times`：填写一个或多个 24 小时制时间，例如 `04:00`、`16:30`。
+- `plugin_updates.check_on_startup`：是否在 AstrBot 启动后额外检查一次。
 
 无效时间会被记录为警告并忽略；重复时间会自动去重。日历模式不会补跑 AstrBot 启动前已经错过的任务。
 
-`plugin_auto_update` 默认开启，保持原有的“检查到更新后自动更新插件”行为。关闭后，定时任务只检查可用更新并向 `admin_sid_list` 发送汇报，不会更新插件或触发重启；`更新所有插件` 管理员命令不受此配置影响。
+`plugin_updates.auto_update` 默认开启，保持原有的“检查到更新后自动更新插件”行为。关闭后，定时任务只检查可用更新并向 `notifications.admin_sid_list` 发送汇报，不会更新插件或触发重启；`更新所有插件` 管理员命令不受此配置影响。
 
 ## AstrBot 框架定时
 
-开启 `astrbot_auto_update` 后，可单独设置以下时间表，不会读取或修改插件更新的定时配置：
+在“框架更新”配置组中开启 `schedule_enabled` 后，可单独设置以下时间表，不会读取或修改插件更新的定时配置：
 
-- `astrbot_schedule_mode`：选择固定间隔或指定星期和时间。
-- `astrbot_interval_hours`：固定间隔模式下的检查间隔，填 `0` 可停用该模式。
-- `astrbot_check_weekdays`、`astrbot_check_times`：日历模式下的执行日期和时间。
-- `astrbot_check_on_startup`：日历模式下启动后立即额外检查一次。
+- `framework_updates.schedule_mode`：选择固定间隔或指定星期和时间。
+- `framework_updates.interval_hours`：固定间隔模式下的检查间隔，填 `0` 可停用该模式。
+- `framework_updates.check_weekdays`、`framework_updates.check_times`：日历模式下的执行日期和时间。
+- `framework_updates.check_on_startup`：日历模式下启动后立即额外检查一次。
 
-发现 AstrBot 新版本时会自动更新、发送更新日志到管理员 SID 列表并重启；默认关闭。
+`framework_updates.auto_update` 默认开启；关闭后发现 AstrBot 新版本时只检查并通知，不下载、不更新、不重启。`framework_updates.schedule_enabled` 默认关闭，保持旧版默认行为；旧配置的 `astrbot_auto_update` 会自动迁移为该开关。
 
 ## 配置说明
 
 | 配置项 | 说明 |
 | --- | --- |
-| `schedule_mode` | 插件更新：`interval` 为固定间隔，`calendar` 为指定星期和时间 |
-| `interval_hours` | 插件更新：方式 1 的检查间隔，单位为小时 |
-| `check_weekdays` | 插件更新：方式 2 的每周执行日期 |
-| `check_times` | 插件更新：方式 2 的每日执行时间列表，格式为 `HH:MM` |
-| `check_on_startup` | 插件更新：方式 2 下启动后是否立即检查一次 |
-| `plugin_auto_update` | 插件更新：定时检查后是否自动更新，默认开启；关闭后仅向管理员通知可用更新 |
-| `restart_mode` | 插件更新：有插件更新成功后是否自动重启 AstrBot |
-| `send_changelog_to_admin` | 插件更新：成功后读取本地 CHANGELOG，以合并转发发送给管理员 |
-| `update_report_fields` | 通知：发现可更新插件时每个插件的汇报字段，可多选；固定按“插件名称、插件 ID、版本变化、仓库链接、作者”顺序显示 |
-| `astrbot_update_enabled` | AstrBot 框架：总开关，默认开启；不影响 `重启astrbot` |
-| `astrbot_include_prerelease` | AstrBot 框架：是否将预发布版本纳入检查和更新，默认关闭 |
-| `astrbot_changelog_forward_threshold` | AstrBot 框架：更新日志超过该字数时使用合并转发；检查命令回复及手动/定时更新的管理员通知均适用，默认 100；填 0 时所有非空日志均转发 |
-| `astrbot_send_changelog_to_admin` | AstrBot 框架：成功后是否向管理员发送发布更新日志，默认开启 |
-| `astrbot_auto_update` | AstrBot 框架：是否启用独立定时更新，默认关闭 |
-| `astrbot_schedule_mode` | AstrBot 框架：`interval` 为固定间隔，`calendar` 为指定星期和时间 |
-| `astrbot_interval_hours` | AstrBot 框架：方式 1 的检查间隔，单位为小时 |
-| `astrbot_check_weekdays` | AstrBot 框架：方式 2 的每周执行日期 |
-| `astrbot_check_times` | AstrBot 框架：方式 2 的每日执行时间列表，格式为 `HH:MM` |
-| `astrbot_check_on_startup` | AstrBot 框架：方式 2 下启动后是否立即检查一次 |
-| `admin_sid_list` | 通知：接收定时结果与 AstrBot 更新日志的管理员会话 SID |
-| `github_proxy` | 网络：GitHub 加速地址，也会传给 AstrBot 框架更新服务；不填则不使用 |
-| `github_token` | 网络：可选 GitHub API Token，用于自定义源的仓库、提交和 metadata 查询 |
-| `custom_plugin_sources` | 插件更新：为已安装插件绑定 GitHub 仓库，可搜索选择本地插件 |
-| `white_plugin_list` | 插件更新：非空时只检查所选插件，支持搜索和多选 |
-| `black_plugin_list` | 插件更新：跳过所选插件，支持搜索和多选 |
-| `test_mode` | 调试：在插件目录生成 `test.md` 调试数据 |
+| `plugin_updates` | 插件更新、定时方式、自动更新、白名单、黑名单和自定义源 |
+| `framework_updates` | AstrBot 框架总开关、定时检查、自动更新和发布日志设置 |
+| `notifications` | 管理员会话和更新汇报字段 |
+| `network` | GitHub 代理与 API Token |
+| `debug` | 测试模式 |
 
 黑名单优先于白名单。测试分支或不希望自动更新的插件，应主动加入黑名单。
 
 ### 更新汇报
 
-`update_report_fields` 默认勾选“插件名称”“插件 ID”和“版本变化”，用于 `检查插件更新` 以及定时检查通知中“发现 N 个插件需要更新”后的插件列表。可额外勾选仓库链接和作者；字段顺序固定，不随勾选顺序改变。
+`notifications.update_report_fields` 默认勾选“插件名称”“插件 ID”和“版本变化”，用于 `检查插件更新` 以及定时检查通知中“发现 N 个插件需要更新”后的插件列表。可额外勾选仓库链接和作者；字段顺序固定，不随勾选顺序改变。
 
 仓库链接来自本次实际命中的更新来源：插件市场使用对应市场条目的 `repo`，自定义 GitHub 更新源使用其绑定仓库地址；缺失的元数据会显示为“未知”，不会使用其他字段补充。
 
-更新成功后发送的 CHANGELOG 不受 `update_report_fields` 影响。每个插件的日志始终以 `【插件名称】` 开头，随后显示版本范围。
+更新成功后发送的 CHANGELOG 不受 `notifications.update_report_fields` 影响。每个插件的日志始终以 `【插件名称】` 开头，随后显示版本范围。
 
 ### 测试更新通知
 
@@ -232,13 +211,13 @@ AstrBot 启动后每隔 `interval_hours` 小时检查插件更新：
 
 ### GitHub API 说明
 
-自定义更新源检查会通过 GitHub API 查询仓库默认分支、commit 和远端 metadata。未填写 `github_token` 时使用匿名请求，频繁检查或多人共享同一出口 IP 时可能遇到 API 限流。
+自定义更新源检查会通过 GitHub API 查询仓库默认分支、commit 和远端 metadata。未填写 `network.github_token` 时使用匿名请求，频繁检查或多人共享同一出口 IP 时可能遇到 API 限流。
 
 如遇到 GitHub API 限流，可按以下步骤获取 Token：
 
 1. 登录 GitHub，进入头像菜单中的 **Settings → Developer settings → Personal access tokens → Fine-grained tokens**。
 2. 点击 **Generate new token**，为 Token 设置合适的有效期，并只授予目标仓库所需的只读权限；不需要授予写入或管理仓库权限。
-3. 创建后立即复制 Token，在插件配置的 `github_token` 中填写，然后重载插件。
+3. 创建后立即复制 Token，在插件配置的 `network.github_token` 中填写，然后重载插件。
 
 Token 仅用于 GitHub API 请求认证，不会显示在运行日志中。请勿将 Token 提交到公开仓库、发到聊天消息或截图中；如发生泄露，应立即在 GitHub 中撤销并重新生成。
 
@@ -262,13 +241,13 @@ Token 仅用于 GitHub API 请求认证，不会显示在运行日志中。请�
 ## 注意事项
 
 - 自动更新会修改插件文件。重要插件建议先备份。
-- 市场或自定义源提供固定安装包地址时，新版 AstrBot 会优先下载该安装包，此时 `github_proxy` 不参与该安装包下载。
-- GitHub API 出现 `403 rate limit exceeded` 时，在配置页填写 `github_token` 后重载插件；Token 仅用于 GitHub API 请求，不会写入日志。
+- 市场或自定义源提供固定安装包地址时，新版 AstrBot 会优先下载该安装包，此时 `network.github_proxy` 不参与该安装包下载。
+- GitHub API 出现 `403 rate limit exceeded` 时，在配置页填写 `network.github_token` 后重载插件；Token 仅用于 GitHub API 请求，不会写入日志。
 - 插件市场不可访问时会明确提示；已成功检查到的自定义源更新仍可继续执行。
 - 插件版本无法比较、市场不存在或匹配有歧义时，会跳过该插件并在结果中说明。
 - 重启功能通过 AstrBot 本地 Dashboard 接口完成，不需要安装其他重启插件。
 - 框架更新由 AstrBot 原生更新器执行；`更新astrbot` 会等待任务成功后再重启，等待超时则保留任务运行状态，不会强制重启。
-- `astrbot_send_changelog_to_admin` 开启时，AstrBot 框架更新成功后会发送对应发布版本的更新日志到 `admin_sid_list`；发布服务暂时不可用时不影响更新和重启。
+- `framework_updates.send_changelog_to_admin` 开启时，AstrBot 框架更新成功后会发送对应发布版本的更新日志到 `notifications.admin_sid_list`；发布服务暂时不可用时不影响更新和重启。
 
 ## 致谢
 

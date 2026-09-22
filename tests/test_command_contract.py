@@ -4,6 +4,28 @@ import unittest
 from pathlib import Path
 
 
+class VersionConsistencyContractTests(unittest.TestCase):
+    def test_current_version_is_aligned_across_release_files(self):
+        root = Path(__file__).resolve().parents[1]
+        expected = "2.8.0"
+        readme = root.joinpath("README.md").read_text(encoding="utf-8")
+        metadata = root.joinpath("metadata.yaml").read_text(encoding="utf-8")
+        changelog = root.joinpath("CHANGELOG.md").read_text(encoding="utf-8")
+        source = root.joinpath("main.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        register_call = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "register"
+        )
+        self.assertEqual(ast.literal_eval(register_call.args[3]), expected)
+        self.assertIn(f"# AstrBot 插件更新管理器 v{expected}", readme)
+        self.assertIn(f"version: v{expected}", metadata)
+        self.assertIn(f"## v{expected}", changelog)
+
+
 class ScheduledPluginUpdateModeContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

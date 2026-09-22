@@ -77,6 +77,12 @@
       "schedule_mode": "calendar"
     }
   },
+  "plugin_auto_update": {
+    "description": "插件更新：定时检查后自动更新",
+    "type": "bool",
+    "hint": "开启时按原有行为自动更新；关闭后仅检查可用更新并向管理员 SID 列表发送通知",
+    "default": true
+  },
   "admin_sid_list": {
     "description": "通知：管理员 SID 列表",
     "type": "list",

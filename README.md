@@ -50,11 +50,11 @@
 | **插件维护** |  |  |  |
 | `安装插件 <链接>` | `installplugin`、`plugininstall` | 调用 AstrBot 原生接口安装并加载插件 | 管理员 |
 | `重新安装插件 <插件名> [地址] [--no-proxy]` | `reinstallplugin`、`reinstall` | 覆盖式重新下载安装指定插件，不进行版本比较 | 管理员 |
+| `重新安装插件<仓库链接> [--no-proxy]` | `reinstallplugin`、`reinstall` | 从仓库 metadata.name 定位插件并覆盖重装 | 管理员 |
 | `清除插件数据 <插件名> --confirm` | `clearplugindata`、`clearplugin` | 清除插件持久化文件和 KV 数据并重载插件，不删除用户配置 | 管理员 |
 | **AstrBot 框架** |  |  |  |
 | `检查astrbot更新` | `checkastrbotupdates`、`checkastrbot`、`检查AstrBot更新` | 检查 AstrBot 框架更新并显示目标版本的更新日志 | 管理员 |
 | `更新astrbot` | `updateastrbot`、`astrbotupdate`、`更新AstrBot` | 更新 AstrBot 核心、WebUI 和依赖，成功后重启 | 管理员 |
-| `重新安装插件<仓库链接> [--no-proxy]` | `reinstallplugin`、`reinstall` | 从仓库 metadata.name 定位插件并覆盖重装 | 管理员 |
 | `重启astrbot` | `restartastrbot`、`astrbotrestart` | 调用 Dashboard 接口重启 AstrBot | 管理员 |
 
 ### 更新 AstrBot 框架

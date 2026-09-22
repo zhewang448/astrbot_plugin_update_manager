@@ -26,6 +26,18 @@ class VersionConsistencyContractTests(unittest.TestCase):
         self.assertIn(f"## v{expected}", changelog)
 
 
+class PluginMaintenanceDocumentationContractTests(unittest.TestCase):
+    def test_reinstall_repository_form_is_under_plugin_maintenance(self):
+        readme = Path(__file__).resolve().parents[1].joinpath("README.md").read_text(
+            encoding="utf-8"
+        )
+        maintenance_start = readme.index("| **插件维护** |")
+        framework_start = readme.index("| **AstrBot 框架** |")
+        reinstall_form = "`重新安装插件<仓库链接> [--no-proxy]`"
+        self.assertGreaterEqual(readme.index(reinstall_form), maintenance_start)
+        self.assertLess(readme.index(reinstall_form), framework_start)
+
+
 class ScheduledPluginUpdateModeContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

@@ -1,6 +1,56 @@
 import ast
+import json
 import unittest
 from pathlib import Path
+
+
+class ScheduledPluginUpdateModeContractTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parents[1]
+        cls.schema = json.loads(root.joinpath("_conf_schema.json").read_text(encoding="utf-8"))
+        tree = ast.parse(root.joinpath("main.py").read_text(encoding="utf-8"))
+        methods = {
+            node.name: node
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
+            and node.name
+            in {"__init__", "_scheduled_update_check", "_format_plugin_check_result"}
+        }
+        cls.initialize = methods["__init__"]
+        cls.scheduled_check = methods["_scheduled_update_check"]
+        cls.format_check_result = methods["_format_plugin_check_result"]
+
+    def test_auto_update_configuration_defaults_to_enabled(self):
+        self.assertEqual(
+            self.schema["plugin_auto_update"],
+            {
+                "description": "插件更新：定时检查后自动更新",
+                "type": "bool",
+                "hint": "开启时按原有行为自动更新；关闭后仅检查可用更新并向管理员 SID 列表发送通知",
+                "default": True,
+            },
+        )
+        self.assertIn(
+            "self.plugin_auto_update = self.config.get('plugin_auto_update', True)",
+            ast.unparse(self.initialize),
+        )
+
+    def test_disabled_mode_checks_and_notifies_without_updating_or_restarting(self):
+        source = ast.unparse(self.scheduled_check)
+        self.assertIn("if self.plugin_auto_update", source)
+        self.assertIn("await self._check_and_perform_updates()", source)
+        self.assertIn("await self.get_need_update_plugins_list()", source)
+        self.assertIn("self._format_plugin_check_result(check_result)", source)
+        self.assertIn("need_to_restart = False", source)
+        self.assertIn("await self.send_message_to_admin", source)
+        self.assertIn("if need_to_restart", source)
+
+    def test_check_only_message_reuses_standard_update_report(self):
+        source = ast.unparse(self.format_check_result)
+        self.assertIn("format_update_report", source)
+        self.assertIn("self._format_check_notes(check_result)", source)
+        self.assertIn("truncate_text", source)
 
 
 class PluginDataCleanupCommandContractTests(unittest.TestCase):

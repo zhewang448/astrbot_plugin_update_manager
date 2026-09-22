@@ -74,7 +74,7 @@ class UpdateCheckResult:
     PLUGIN_NAME,
     "bushikq",
     "一个用于一键更新和管理所有 AstrBot 插件的工具，支持定时检查",
-    "2.7.2",
+    "2.7.3",
 )
 class PluginUpdateManager(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
@@ -88,6 +88,7 @@ class PluginUpdateManager(Star):
         )
         self.check_times = self.config.get("check_times", ["04:00"])
         self.check_on_startup = self.config.get("check_on_startup", False)
+        self.plugin_auto_update = self.config.get("plugin_auto_update", True)
         self.proxy_address = str(self.config.get("github_proxy", "") or "").strip()
         self.github_token = str(self.config.get("github_token", "") or "").strip()
         self.test_mode = self.config.get("test_mode", False)
@@ -446,8 +447,19 @@ class PluginUpdateManager(Star):
             logger.warning("定时任务：已有插件更新检查正在执行，本次跳过。")
             return
 
-        logger.info("定时任务：正在检查并更新插件...")
-        final_message, need_to_restart = await self._check_and_perform_updates()
+        if self.plugin_auto_update:
+            logger.info("定时任务：正在检查并更新插件...")
+            final_message, need_to_restart = await self._check_and_perform_updates()
+        else:
+            logger.info("定时任务：正在检查插件更新（仅通知）...")
+            try:
+                async with self._update_lock:
+                    check_result = await self.get_need_update_plugins_list()
+                final_message = self._format_plugin_check_result(check_result)
+            except Exception as exc:
+                logger.error(f"定时插件检查失败：{traceback.format_exc()}")
+                final_message = f"定时插件检查失败：{exc}"
+            need_to_restart = False
         await self.send_message_to_admin([Comp.Plain(text=final_message)])
         if need_to_restart:
             await self.restart_command()
@@ -687,6 +699,27 @@ class PluginUpdateManager(Star):
             except Exception as exc:
                 logger.error(f"插件更新流程异常：{traceback.format_exc()}")
                 return f"插件更新流程异常终止：{exc}", False
+
+    def _format_plugin_check_result(self, check_result: UpdateCheckResult) -> str:
+        """将仅检查模式的结果格式化为管理员通知文本。"""
+        if check_result.status == "fetch_failed":
+            return "插件市场请求失败，请检查网络或代理设置后重试。"
+
+        notes = self._format_check_notes(check_result)
+        if not check_result.updates:
+            message = "目前没有发现需要更新的插件。"
+            if notes:
+                message += f"\n\n{notes}"
+            return message
+
+        lines = [
+            format_update_report(
+                check_result.updates, self._get_update_report_fields()
+            )
+        ]
+        if notes:
+            lines.append(notes)
+        return truncate_text("\n\n".join(lines), MAX_STATUS_MESSAGE_CHARS)
 
     @staticmethod
     def _format_check_notes(result: UpdateCheckResult) -> str:
@@ -1259,27 +1292,8 @@ class PluginUpdateManager(Star):
                 yield event.plain_result(f"检查失败：{exc}")
                 return
 
-        if check_result.status == "fetch_failed":
-            yield event.plain_result("插件市场请求失败，请检查网络或代理设置后重试。")
-            return
-
-        notes = self._format_check_notes(check_result)
-        if not check_result.updates:
-            message = "目前没有发现需要更新的插件。"
-            if notes:
-                message += f"\n\n{notes}"
-            yield event.plain_result(message)
-            return
-
-        lines = [
-            format_update_report(
-                check_result.updates, self._get_update_report_fields()
-            )
-        ]
-        if notes:
-            lines.append(f"\n{notes}")
         yield event.plain_result(
-            truncate_text("\n".join(lines), MAX_STATUS_MESSAGE_CHARS)
+            self._format_plugin_check_result(check_result)
         ).use_t2i(False)
 
 

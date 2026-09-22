@@ -1,330 +1,84 @@
 {
-  "schedule_mode": {
-    "description": "插件更新：定时方式",
-    "type": "string",
-    "options": [
-      "interval",
-      "calendar"
-    ],
-    "labels": [
-      "方式 1：固定间隔",
-      "方式 2：指定星期和时间"
-    ],
-    "hint": "仅用于插件更新；方式 1 保持原有行为，方式 2 可选择每周哪些天、每天哪些时间检查",
-    "default": "interval"
-  },
-  "interval_hours": {
-    "description": "插件更新：固定检查间隔（小时）",
-    "type": "float",
-    "hint": "仅用于插件更新；AstrBot 启动后每隔 N 小时检查一次，可为浮点数；填 0 则停用定时检查",
-    "default": 24,
-    "condition": {
-      "schedule_mode": "interval"
+  "plugin_updates": {
+    "description": "插件更新",
+    "type": "object",
+    "items": {
+      "schedule_mode": {"description": "定时方式", "type": "string", "options": ["interval", "calendar"], "labels": ["固定间隔", "指定星期和时间"], "hint": "选择插件更新任务的调度方式。", "default": "interval"},
+      "interval_hours": {"description": "固定检查间隔（小时）", "type": "float", "hint": "每隔 N 小时检查一次；填 0 可停用插件定时任务。", "default": 24, "condition": {"schedule_mode": "interval"}},
+      "check_weekdays": {"description": "每周检查日期", "type": "list", "options": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "labels": ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"], "hint": "日历方式下选择一个或多个星期。", "default": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "condition": {"schedule_mode": "calendar"}},
+      "check_times": {"description": "每日检查时间", "type": "list", "hint": "日历方式下填写 HH:MM，例如 04:00、16:30。", "default": ["04:00"], "condition": {"schedule_mode": "calendar"}},
+      "check_on_startup": {"description": "启动后立即检查", "type": "bool", "hint": "日历方式下，AstrBot 启动后额外检查一次。", "default": false, "condition": {"schedule_mode": "calendar"}},
+      "auto_update": {"description": "定时发现更新后自动更新", "type": "bool", "hint": "关闭后只检查并通知，不更新插件或触发重启。", "default": true},
+      "restart_mode": {"description": "插件更新成功后重启", "type": "bool", "hint": "定时或手动更新成功后是否重启 AstrBot。", "default": false},
+      "send_changelog_to_admin": {"description": "更新成功后发送日志", "type": "bool", "hint": "向管理员发送插件 CHANGELOG；仅发送存在日志的插件。", "default": false},
+      "custom_plugin_sources": {"description": "自定义 GitHub 更新源", "type": "template_list", "hint": "为未上架插件绑定 GitHub 仓库；绑定后优先使用自定义源。", "default": [], "templates": {"github_metadata": {"name": "GitHub metadata.yaml", "hint": "从仓库读取 metadata.yaml 或 metadata.yml 中的版本。", "display_item": "repo", "items": {"plugin": {"description": "本地插件", "type": "list", "options": [], "labels": [], "hint": "搜索并选择一个已安装插件。", "default": []}, "repo": {"description": "GitHub 仓库", "type": "string", "hint": "格式：https://github.com/owner/repo。", "default": ""}, "branch": {"description": "分支", "type": "string", "hint": "留空则使用仓库默认分支。", "default": ""}}}}},
+      "white_plugin_list": {"description": "白名单插件", "type": "list", "options": [], "labels": [], "hint": "非空时只检查选中的插件。", "default": []},
+      "black_plugin_list": {"description": "黑名单插件", "type": "list", "options": [], "labels": [], "hint": "跳过选中的插件；黑名单优先于白名单。", "default": []}
     }
   },
-  "check_weekdays": {
-    "description": "插件更新：每周检查日期",
-    "type": "list",
-    "options": [
-      "mon",
-      "tue",
-      "wed",
-      "thu",
-      "fri",
-      "sat",
-      "sun"
-    ],
-    "labels": [
-      "星期一",
-      "星期二",
-      "星期三",
-      "星期四",
-      "星期五",
-      "星期六",
-      "星期日"
-    ],
-    "hint": "可搜索并多选；至少选择一天",
-    "default": [
-      "mon",
-      "tue",
-      "wed",
-      "thu",
-      "fri",
-      "sat",
-      "sun"
-    ],
-    "condition": {
-      "schedule_mode": "calendar"
+  "framework_updates": {
+    "description": "AstrBot 框架更新",
+    "type": "object",
+    "items": {
+      "enabled": {"description": "启用框架更新功能", "type": "bool", "hint": "关闭后框架检查、更新和定时任务均停用；手动重启不受影响。", "default": true},
+      "schedule_enabled": {"description": "启用框架定时检查", "type": "bool", "hint": "开启后按下方时间表检查 AstrBot 更新；兼容旧版 astrbot_auto_update。", "default": false},
+      "auto_update": {"description": "定时发现更新后自动更新", "type": "bool", "hint": "关闭后定时任务只检查并通知，不下载更新或重启。", "default": true},
+      "schedule_mode": {"description": "定时方式", "type": "string", "options": ["interval", "calendar"], "labels": ["固定间隔", "指定星期和时间"], "hint": "选择框架定时任务的调度方式。", "default": "interval", "condition": {"schedule_enabled": true}},
+      "interval_hours": {"description": "固定检查间隔（小时）", "type": "float", "hint": "每隔 N 小时检查一次；填 0 可停用框架定时任务。", "default": 24, "condition": {"schedule_enabled": true, "schedule_mode": "interval"}},
+      "check_weekdays": {"description": "每周检查日期", "type": "list", "options": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "labels": ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"], "hint": "日历方式下选择一个或多个星期。", "default": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "condition": {"schedule_enabled": true, "schedule_mode": "calendar"}},
+      "check_times": {"description": "每日检查时间", "type": "list", "hint": "日历方式下填写 HH:MM，例如 04:00、16:30。", "default": ["04:00"], "condition": {"schedule_enabled": true, "schedule_mode": "calendar"}},
+      "check_on_startup": {"description": "启动后立即检查", "type": "bool", "hint": "日历方式下，AstrBot 启动后额外检查一次。", "default": false, "condition": {"schedule_enabled": true, "schedule_mode": "calendar"}},
+      "include_prerelease": {"description": "检查预发布版本", "type": "bool", "hint": "将高于当前版本的预发布版本纳入检查和更新。", "default": false, "condition": {"enabled": true}},
+      "changelog_forward_threshold": {"description": "更新日志转发阈值（字）", "type": "int", "hint": "超过该字数时使用合并转发；填 0 表示所有非空日志均转发。", "default": 100, "condition": {"enabled": true}},
+      "send_changelog_to_admin": {"description": "更新成功后发送日志", "type": "bool", "hint": "向管理员发送 AstrBot 发布版本的更新日志。", "default": true, "condition": {"enabled": true}}
     }
   },
-  "check_times": {
-    "description": "插件更新：每日检查时间",
-    "type": "list",
-    "hint": "可填写多个时间，每项使用 24 小时制 HH:MM，例如 04:00、16:30",
-    "default": [
-      "04:00"
-    ],
-    "condition": {
-      "schedule_mode": "calendar"
+  "notifications": {
+    "description": "通知",
+    "type": "object",
+    "items": {
+      "admin_sid_list": {"description": "管理员会话 SID", "type": "list", "hint": "接收定时检查结果和更新日志；可在会话中发送 /sid 获取。", "default": []},
+      "update_report_fields": {"description": "更新汇报字段", "type": "list", "options": ["display_name", "plugin_id", "version", "repository_url", "author"], "labels": ["插件名称", "插件 ID", "版本变化", "仓库链接", "作者"], "hint": "用于发现更新时的插件列表；字段按固定顺序显示。", "default": ["display_name", "plugin_id", "version"]}
     }
   },
-  "check_on_startup": {
-    "description": "插件更新：启动后立即检查一次",
-    "type": "bool",
-    "hint": "仅用于方式 2；不会补跑启动前错过的任务",
-    "default": false,
-    "condition": {
-      "schedule_mode": "calendar"
+  "network": {
+    "description": "网络",
+    "type": "object",
+    "items": {
+      "github_proxy": {"description": "GitHub 加速地址", "type": "string", "hint": "例如 https://gh-proxy.com；留空则不使用。", "default": ""},
+      "github_token": {"description": "GitHub API Token", "type": "string", "hint": "可选，用于提高 GitHub API 限额。", "secret": true, "default": ""}
     }
   },
-  "plugin_auto_update": {
-    "description": "插件更新：定时检查后自动更新",
-    "type": "bool",
-    "hint": "开启时按原有行为自动更新；关闭后仅检查可用更新并向管理员 SID 列表发送通知",
-    "default": true
+  "debug": {
+    "description": "调试",
+    "type": "object",
+    "items": {"test_mode": {"description": "测试模式", "type": "bool", "hint": "在插件目录输出本地插件、市场数据和匹配结果。", "default": false}}
   },
-  "admin_sid_list": {
-    "description": "通知：管理员 SID 列表",
-    "type": "list",
-    "hint": "定时检查结束后向这些会话发送结果；可在对应会话发送 /sid 获取",
-    "default": []
-  },
-  "update_report_fields": {
-    "description": "通知：发现更新时的汇报字段",
-    "type": "list",
-    "options": [
-      "display_name",
-      "plugin_id",
-      "version",
-      "repository_url",
-      "author"
-    ],
-    "labels": [
-      "插件名称",
-      "插件 ID",
-      "版本变化",
-      "仓库链接",
-      "作者"
-    ],
-    "render_type": "checkbox",
-    "hint": "用于“发现 N 个插件需要更新”的通知；字段显示顺序固定。更新日志始终带插件名称，不受此项影响。",
-    "default": [
-      "display_name",
-      "plugin_id",
-      "version"
-    ]
-  },
-  "github_proxy": {
-    "description": "网络：GitHub 加速地址",
-    "type": "string",
-    "hint": "例如 https://gh-proxy.com，不填则不使用；市场 download_url 可用时会优先使用市场安装包",
-    "default": ""
-  },
-  "github_token": {
-    "description": "网络：GitHub API Token",
-    "type": "string",
-    "hint": "可选；填写 GitHub Personal Access Token（PAT）后用于提高 API 限额，建议使用最小权限 Token；留空则使用匿名请求",
-    "default": ""
-  },
-  "custom_plugin_sources": {
-    "description": "插件更新：自定义更新源",
-    "type": "template_list",
-    "hint": "绑定未进入插件市场的 GitHub 插件；绑定后该插件优先使用自定义源",
-    "default": [],
-    "templates": {
-      "github_metadata": {
-        "name": "GitHub metadata.yaml",
-        "hint": "从指定仓库读取 metadata.yaml 或 metadata.yml 中的版本",
-        "display_item": "repo",
-        "items": {
-          "plugin": {
-            "description": "本地插件",
-            "type": "list",
-            "options": [],
-            "labels": [],
-            "hint": "搜索并选择一个已安装插件；每条绑定只能选择一个",
-            "default": []
-          },
-          "repo": {
-            "description": "GitHub 仓库",
-            "type": "string",
-            "hint": "格式：https://github.com/owner/repo",
-            "default": ""
-          },
-          "branch": {
-            "description": "分支",
-            "type": "string",
-            "hint": "留空则自动使用仓库默认分支",
-            "default": ""
-          }
-        }
-      }
-    }
-  },
-  "white_plugin_list": {
-    "description": "插件更新：白名单插件",
-    "type": "list",
-    "options": [],
-    "labels": [],
-    "hint": "可搜索并多选；非空时只检查选中的插件",
-    "default": []
-  },
-  "black_plugin_list": {
-    "description": "插件更新：黑名单插件",
-    "type": "list",
-    "options": [],
-    "labels": [],
-    "hint": "可搜索并多选；测试分支或不希望自动更新的插件请加入黑名单",
-    "default": []
-  },
-  "restart_mode": {
-    "description": "插件更新：成功后重启 AstrBot",
-    "type": "bool",
-    "default": false
-  },
-  "send_changelog_to_admin": {
-    "description": "插件更新：成功后发送更新日志",
-    "type": "bool",
-    "hint": "更新成功后读取各插件本地 CHANGELOG.md，截取新旧版本区间的内容，以合并转发消息发送给 admin_sid_list 中的管理员；仅发送有 CHANGELOG 的插件",
-    "default": false
-  },
-  "astrbot_update_enabled": {
-    "description": "AstrBot 框架：启用更新功能",
-    "type": "bool",
-    "hint": "关闭后，检查astrbot更新、更新astrbot 和 AstrBot 定时更新均不会执行；重启astrbot 不受影响",
-    "default": true
-  },
-  "astrbot_include_prerelease": {
-    "description": "AstrBot 框架：检查预发布版本",
-    "type": "bool",
-    "hint": "开启后，检查和定时更新会将高于当前版本的预发布版本纳入候选，并按选定版本更新；默认仅检查正式版本",
-    "default": false,
-    "condition": {
-      "astrbot_update_enabled": true
-    }
-  },
-  "astrbot_changelog_forward_threshold": {
-    "description": "AstrBot 框架：检查日志转发阈值（字）",
-    "type": "int",
-    "hint": "目标版本更新日志超过此字数时，检查astrbot更新会以合并转发回复，更新astrbot 成功后会以合并转发通知管理员；填 0 则所有非空更新日志均使用合并转发",
-    "default": 100,
-    "condition": {
-      "astrbot_update_enabled": true
-    }
-  },
-  "astrbot_send_changelog_to_admin": {
-    "description": "AstrBot 框架：成功后发送更新日志",
-    "type": "bool",
-    "hint": "更新成功后，将 AstrBot 发布版本的更新日志发送到管理员 SID 列表；关闭后不影响更新和重启",
-    "default": true,
-    "condition": {
-      "astrbot_update_enabled": true
-    }
-  },
-  "astrbot_auto_update": {
-    "description": "AstrBot 框架：定时更新",
-    "type": "bool",
-    "hint": "启用独立的 AstrBot 框架定时更新；其时间配置与插件更新互不影响",
-    "default": false,
-    "condition": {
-      "astrbot_update_enabled": true
-    }
-  },
-  "astrbot_schedule_mode": {
-    "description": "AstrBot 框架：定时方式",
-    "type": "string",
-    "options": [
-      "interval",
-      "calendar"
-    ],
-    "labels": [
-      "方式 1：固定间隔",
-      "方式 2：指定星期和时间"
-    ],
-    "hint": "仅用于 AstrBot 框架更新，不影响插件更新的定时设置",
-    "default": "interval",
-    "condition": {
-      "astrbot_update_enabled": true,
-      "astrbot_auto_update": true
-    }
-  },
-  "astrbot_interval_hours": {
-    "description": "AstrBot 框架：固定检查间隔（小时）",
-    "type": "float",
-    "hint": "仅用于 AstrBot 框架更新；填 0 则停用框架定时更新",
-    "default": 24,
-    "condition": {
-      "astrbot_update_enabled": true,
-      "astrbot_auto_update": true,
-      "astrbot_schedule_mode": "interval"
-    }
-  },
-  "astrbot_check_weekdays": {
-    "description": "AstrBot 框架：每周检查日期",
-    "type": "list",
-    "options": [
-      "mon",
-      "tue",
-      "wed",
-      "thu",
-      "fri",
-      "sat",
-      "sun"
-    ],
-    "labels": [
-      "星期一",
-      "星期二",
-      "星期三",
-      "星期四",
-      "星期五",
-      "星期六",
-      "星期日"
-    ],
-    "hint": "仅用于 AstrBot 框架更新；至少选择一天",
-    "default": [
-      "mon",
-      "tue",
-      "wed",
-      "thu",
-      "fri",
-      "sat",
-      "sun"
-    ],
-    "condition": {
-      "astrbot_update_enabled": true,
-      "astrbot_auto_update": true,
-      "astrbot_schedule_mode": "calendar"
-    }
-  },
-  "astrbot_check_times": {
-    "description": "AstrBot 框架：每日检查时间",
-    "type": "list",
-    "hint": "仅用于 AstrBot 框架更新；每项使用 24 小时制 HH:MM，例如 04:00、16:30",
-    "default": [
-      "04:00"
-    ],
-    "condition": {
-      "astrbot_update_enabled": true,
-      "astrbot_auto_update": true,
-      "astrbot_schedule_mode": "calendar"
-    }
-  },
-  "astrbot_check_on_startup": {
-    "description": "AstrBot 框架：启动后立即检查一次",
-    "type": "bool",
-    "hint": "仅用于 AstrBot 框架日历方式；不会补跑启动前错过的任务",
-    "default": false,
-    "condition": {
-      "astrbot_update_enabled": true,
-      "astrbot_auto_update": true,
-      "astrbot_schedule_mode": "calendar"
-    }
-  },
-  "test_mode": {
-    "description": "调试：测试模式",
-    "type": "bool",
-    "hint": "在插件目录的 test.md 中输出本地插件、市场数据和匹配结果",
-    "default": false,
-    "invisible": false
-  }
+  "schedule_mode": {"type": "string", "default": "interval", "invisible": true},
+  "interval_hours": {"type": "float", "default": 24, "invisible": true},
+  "check_weekdays": {"type": "list", "default": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "invisible": true},
+  "check_times": {"type": "list", "default": ["04:00"], "invisible": true},
+  "check_on_startup": {"type": "bool", "default": false, "invisible": true},
+  "plugin_auto_update": {"type": "bool", "default": true, "invisible": true},
+  "custom_plugin_sources": {"type": "template_list", "default": [], "invisible": true},
+  "white_plugin_list": {"type": "list", "default": [], "invisible": true},
+  "black_plugin_list": {"type": "list", "default": [], "invisible": true},
+  "restart_mode": {"type": "bool", "default": false, "invisible": true},
+  "send_changelog_to_admin": {"type": "bool", "default": false, "invisible": true},
+  "astrbot_update_enabled": {"type": "bool", "default": true, "invisible": true},
+  "astrbot_include_prerelease": {"type": "bool", "default": false, "invisible": true},
+  "astrbot_changelog_forward_threshold": {"type": "int", "default": 100, "invisible": true},
+  "astrbot_send_changelog_to_admin": {"type": "bool", "default": true, "invisible": true},
+  "astrbot_auto_update": {"type": "bool", "default": false, "invisible": true},
+  "astrbot_auto_update_mode": {"type": "bool", "default": true, "invisible": true},
+  "astrbot_schedule_mode": {"type": "string", "default": "interval", "invisible": true},
+  "astrbot_interval_hours": {"type": "float", "default": 24, "invisible": true},
+  "astrbot_check_weekdays": {"type": "list", "default": ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], "invisible": true},
+  "astrbot_check_times": {"type": "list", "default": ["04:00"], "invisible": true},
+  "astrbot_check_on_startup": {"type": "bool", "default": false, "invisible": true},
+  "admin_sid_list": {"type": "list", "default": [], "invisible": true},
+  "update_report_fields": {"type": "list", "default": ["display_name", "plugin_id", "version"], "invisible": true},
+  "github_proxy": {"type": "string", "default": "", "invisible": true},
+  "github_token": {"type": "string", "default": "", "invisible": true},
+  "test_mode": {"type": "bool", "default": false, "invisible": true}
 }

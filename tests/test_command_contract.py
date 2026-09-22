@@ -15,26 +15,54 @@ class ScheduledPluginUpdateModeContractTests(unittest.TestCase):
             for node in ast.walk(tree)
             if isinstance(node, (ast.AsyncFunctionDef, ast.FunctionDef))
             and node.name
-            in {"__init__", "_scheduled_update_check", "_format_plugin_check_result"}
+            in {
+                "__init__",
+                "_scheduled_update_check",
+                "_scheduled_astrbot_update",
+                "_check_astrbot_update_only",
+                "_format_plugin_check_result",
+                "_migrate_legacy_config",
+            }
         }
         cls.initialize = methods["__init__"]
         cls.scheduled_check = methods["_scheduled_update_check"]
+        cls.scheduled_framework_check = methods["_scheduled_astrbot_update"]
+        cls.framework_check_only = methods["_check_astrbot_update_only"]
         cls.format_check_result = methods["_format_plugin_check_result"]
+        cls.migrate_config = methods["_migrate_legacy_config"]
 
     def test_auto_update_configuration_defaults_to_enabled(self):
-        self.assertEqual(
-            self.schema["plugin_auto_update"],
-            {
-                "description": "插件更新：定时检查后自动更新",
-                "type": "bool",
-                "hint": "开启时按原有行为自动更新；关闭后仅检查可用更新并向管理员 SID 列表发送通知",
-                "default": True,
-            },
+        self.assertEqual(self.schema["plugin_updates"]["type"], "object")
+        self.assertEqual(self.schema["framework_updates"]["type"], "object")
+        self.assertTrue(
+            self.schema["plugin_updates"]["items"]["auto_update"]["default"]
         )
-        self.assertIn(
-            "self.plugin_auto_update = self.config.get('plugin_auto_update', True)",
-            ast.unparse(self.initialize),
+        self.assertTrue(
+            self.schema["framework_updates"]["items"]["auto_update"]["default"]
         )
+        self.assertTrue(
+            self.schema["schedule_mode"]["invisible"]
+            and self.schema["astrbot_auto_update"]["invisible"]
+        )
+        source = ast.unparse(self.initialize)
+        self.assertIn("self._migrate_legacy_config()", source)
+        self.assertIn("self.plugin_auto_update = plugin_config.get('auto_update', True)", source)
+
+    def test_framework_schedule_can_check_without_applying_updates(self):
+        source = ast.unparse(self.scheduled_framework_check)
+        self.assertIn("self.astrbot_framework_auto_update", source)
+        self.assertIn("await self._check_astrbot_update_only()", source)
+        self.assertIn("need_to_restart = False", source)
+        check_source = ast.unparse(self.framework_check_only)
+        self.assertIn("check_astrbot_update", check_source)
+        self.assertIn("未执行更新或重启", check_source)
+
+    def test_migration_maps_flat_keys_into_nested_sections(self):
+        source = ast.unparse(self.migrate_config)
+        self.assertIn("plugin_updates", source)
+        self.assertIn("framework_updates", source)
+        self.assertIn("self.config[legacy_key] = default", source)
+        self.assertIn("save_config", source)
 
     def test_disabled_mode_checks_and_notifies_without_updating_or_restarting(self):
         source = ast.unparse(self.scheduled_check)
@@ -168,7 +196,7 @@ class TestPluginChangelogCommandContractTests(unittest.TestCase):
         self.assertIn("entries = self._get_local_plugin_preview_entries()[:5]", source)
         self.assertIn("report = self._build_local_plugin_test_report(entries)", source)
         self.assertIn("await self._build_local_plugin_changelog_nodes(entries)", source)
-        self.assertIn("if bool(self.config.get('astrbot_update_enabled', True))", source)
+        self.assertIn("if self.astrbot_update_enabled", source)
         self.assertIn("await self._build_latest_astrbot_changelog_node()", source)
         self.assertIn("yield event.chain_result([NodesCls(nodes=nodes)]).use_t2i(False)", source)
         self.assertNotIn("truncate_text", source)

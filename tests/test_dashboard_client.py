@@ -279,23 +279,15 @@ def test_astrbot_update_commands_check_before_starting_update():
         "check_on_startup",
     }
     assert legacy_plugin_schedule.issubset(schema)
-    assert schema["astrbot_update_enabled"]["default"] is True
-    assert schema["astrbot_include_prerelease"]["default"] is False
-    assert schema["astrbot_include_prerelease"]["condition"] == {
-        "astrbot_update_enabled": True
-    }
-    assert schema["astrbot_auto_update"]["default"] is False
-    assert schema["astrbot_auto_update"]["condition"] == {
-        "astrbot_update_enabled": True
-    }
-    assert schema["astrbot_send_changelog_to_admin"]["default"] is True
-    assert schema["astrbot_send_changelog_to_admin"]["condition"] == {
-        "astrbot_update_enabled": True
-    }
-    assert schema["astrbot_changelog_forward_threshold"]["default"] == 100
-    assert schema["astrbot_changelog_forward_threshold"]["condition"] == {
-        "astrbot_update_enabled": True
-    }
+    framework_schema = schema["framework_updates"]["items"]
+    assert framework_schema["enabled"]["default"] is True
+    assert framework_schema["include_prerelease"]["default"] is False
+    assert framework_schema["include_prerelease"]["condition"] == {"enabled": True}
+    assert framework_schema["schedule_enabled"]["default"] is False
+    assert framework_schema["auto_update"]["default"] is True
+    assert framework_schema["send_changelog_to_admin"]["default"] is True
+    assert framework_schema["send_changelog_to_admin"]["condition"] == {"enabled": True}
+    assert framework_schema["changelog_forward_threshold"]["default"] == 100
     check_command_source = ast.get_source_segment(source, check_command)
     update_command_source = ast.get_source_segment(source, update_command)
     update_helper_source = ast.get_source_segment(source, update_helper)
@@ -309,9 +301,9 @@ def test_astrbot_update_commands_check_before_starting_update():
     assert "_send_astrbot_changelog" in update_command_source
     assert "_send_astrbot_changelog" in scheduled_update_source
     assert "get_astrbot_update_release" in update_helper_source
-    assert schema["astrbot_schedule_mode"]["default"] == "interval"
-    assert schema["astrbot_interval_hours"]["default"] == 24
-    assert schema["astrbot_check_weekdays"]["default"] == [
+    assert framework_schema["schedule_mode"]["default"] == "interval"
+    assert framework_schema["interval_hours"]["default"] == 24
+    assert framework_schema["check_weekdays"]["default"] == [
         "mon",
         "tue",
         "wed",
@@ -320,23 +312,11 @@ def test_astrbot_update_commands_check_before_starting_update():
         "sat",
         "sun",
     ]
-    assert schema["astrbot_check_times"]["default"] == ["04:00"]
-    assert schema["astrbot_check_on_startup"]["default"] is False
-    assert schema["update_report_fields"] == {
-        "description": "通知：发现更新时的汇报字段",
-        "type": "list",
-        "options": [
-            "display_name",
-            "plugin_id",
-            "version",
-            "repository_url",
-            "author",
-        ],
-        "labels": ["插件名称", "插件 ID", "版本变化", "仓库链接", "作者"],
-        "render_type": "checkbox",
-        "hint": "用于“发现 N 个插件需要更新”的通知；字段显示顺序固定。更新日志始终带插件名称，不受此项影响。",
-        "default": ["display_name", "plugin_id", "version"],
-    }
+    assert framework_schema["check_times"]["default"] == ["04:00"]
+    assert framework_schema["check_on_startup"]["default"] is False
+    assert schema["notifications"]["items"]["update_report_fields"]["default"] == [
+        "display_name", "plugin_id", "version"
+    ]
 
     scheduler = functions["_initialize_scheduler"]
     scheduler_source = ast.get_source_segment(source, scheduler)
